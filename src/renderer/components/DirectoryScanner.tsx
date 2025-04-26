@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import IgnoredPathsInfo from './IgnoredPathsInfo';
 
 interface ScanProgressProps {
   fileCount: number;
@@ -172,6 +173,8 @@ export default function DirectoryScanner({ folderPath, onScanComplete }: Directo
             </span>
             {' '}(binary or ≥ 1MB)
           </div>
+          
+          <IgnoredPathsInfo rootPath={results.rootPath} />
         </div>
       )}
     </div>

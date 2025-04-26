@@ -82,7 +82,11 @@ export default function App(): JSX.Element {
     setCopyResult(null);
     
     try {
-      const result = await copyPromptToClipboard(processedSelection.files, rootFolderName);
+      const result = await copyPromptToClipboard(
+        processedSelection.files, 
+        rootFolderName,
+        scanResults?.files  // Pass all files to show complete repo structure
+      );
       
       if (result.success) {
         setCopyResult({
@@ -217,6 +221,7 @@ export default function App(): JSX.Element {
               <FileMapPreview 
                 selectedFiles={processedSelection.files}
                 rootFolderName={rootFolderName}
+                allFiles={scanResults?.files}
               />
             )}
           </>

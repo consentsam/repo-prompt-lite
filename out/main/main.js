@@ -2,6 +2,67 @@
 const electron = require("electron");
 const path = require("path");
 const fs = require("fs");
+function isMatch(filePath, pattern) {
+  let regexPattern = pattern.replace(/\./g, "\\.").replace(/\*\*/g, "{{GLOBSTAR}}").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replace(/{{GLOBSTAR}}/g, ".*");
+  if (!regexPattern.startsWith("^")) {
+    regexPattern = "^" + regexPattern;
+  }
+  if (!regexPattern.endsWith("$")) {
+    regexPattern += "$";
+  }
+  const regex = new RegExp(regexPattern);
+  return regex.test(filePath);
+}
+class IgnoreManager {
+  ignorePatterns = [];
+  rootPath = "";
+  loaded = false;
+  constructor(rootPath) {
+    this.rootPath = rootPath;
+  }
+  async loadIgnoreFile() {
+    try {
+      const ignoreFilePath = path.join(this.rootPath, ".repopromptignore");
+      try {
+        await fs.promises.access(ignoreFilePath);
+      } catch {
+        this.ignorePatterns = ["node_modules/**", ".git/**"];
+        this.loaded = true;
+        return;
+      }
+      const content = await fs.promises.readFile(ignoreFilePath, "utf8");
+      this.ignorePatterns = content.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).map((pattern) => {
+        if (!pattern.includes("/") && !pattern.endsWith("/**")) {
+          return `${pattern}/**`;
+        }
+        return pattern;
+      });
+      if (!this.ignorePatterns.some((p) => p.startsWith("node_modules"))) {
+        this.ignorePatterns.push("node_modules/**");
+      }
+      if (!this.ignorePatterns.some((p) => p.startsWith(".git"))) {
+        this.ignorePatterns.push(".git/**");
+      }
+      this.loaded = true;
+    } catch (error) {
+      console.error("Error loading ignore file:", error);
+      this.ignorePatterns = ["node_modules/**", ".git/**"];
+      this.loaded = true;
+    }
+  }
+  shouldIgnore(filePath) {
+    if (!this.loaded) {
+      throw new Error("Ignore patterns not loaded yet. Call loadIgnoreFile() first.");
+    }
+    const relativePath = path.relative(this.rootPath, filePath);
+    for (const pattern of this.ignorePatterns) {
+      if (isMatch(relativePath, pattern)) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
 function isLikelyBinary(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   const binaryExtensions = [
@@ -91,11 +152,19 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
   let totalTokens = 0;
   const ONE_MB = 1024 * 1024;
   try {
+    const ignoreManager = new IgnoreManager(folderPath);
+    await ignoreManager.loadIgnoreFile();
     async function walk(dir, baseDir) {
+      if (ignoreManager.shouldIgnore(dir)) {
+        return;
+      }
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         const relativePath = path.relative(baseDir, fullPath);
+        if (ignoreManager.shouldIgnore(fullPath)) {
+          continue;
+        }
         fileCount++;
         if (fileCount % 10 === 0) {
           event.sender.send("directory:walkProgress", {
@@ -173,6 +242,16 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
 });
 electron.ipcMain.handle("file:readContent", async (_, filePath) => {
   try {
+    const dirPath = path.dirname(filePath);
+    const ignoreManager = new IgnoreManager(dirPath);
+    await ignoreManager.loadIgnoreFile();
+    if (ignoreManager.shouldIgnore(filePath)) {
+      return {
+        content: "",
+        error: "File is in an ignored directory",
+        isSkipped: true
+      };
+    }
     const stats = await fs.promises.stat(filePath);
     const ONE_MB = 1024 * 1024;
     if (isLikelyBinary(filePath) || stats.size >= ONE_MB) {

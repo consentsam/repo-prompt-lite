@@ -8,20 +8,25 @@ interface TreeNode {
   relativePath: string;
   isDirectory: boolean;
   isSkipped: boolean;
+  isSelected?: boolean;
   children: TreeNode[];
 }
 
 /**
  * Build a tree structure from a flat list of files
  */
-function buildFileTree(files: FileInfo[]): TreeNode {
+function buildFileTree(files: FileInfo[], selectedFiles: FileInfo[] = []): TreeNode {
   const root: TreeNode = {
     name: 'root',
     relativePath: '',
     isDirectory: true,
     isSkipped: false,
+    isSelected: false,
     children: []
   };
+  
+  // Create a set of selected file paths for quick lookup
+  const selectedPathsSet = new Set(selectedFiles.map(file => file.path));
   
   // First, sort the files to ensure directories are processed before their children
   const sortedFiles = [...files].sort((a, b) => 
@@ -47,11 +52,13 @@ function buildFileTree(files: FileInfo[]): TreeNode {
     }
     
     // Create node for this file/directory
+    const isSelected = selectedPathsSet.has(file.path);
     const node: TreeNode = {
       name: fileName,
       relativePath: file.relativePath,
       isDirectory: file.isDirectory,
       isSkipped: file.isSkipped,
+      isSelected,
       children: []
     };
     
@@ -86,11 +93,13 @@ function formatTreeNode(node: TreeNode, prefix: string = '', isLast: boolean = t
   }
   
   // Add the node name with proper formatting
+  let nodeName = node.name;
   if (node.isDirectory) {
-    result += `${node.name}/\n`;
-  } else {
-    result += `${node.name}\n`;
+    nodeName += '/';
   }
+  
+  // Highlight selected files - don't add any special marker as that's not needed in prompt
+  result += `${nodeName}\n`;
   
   // Recursively format child nodes
   const childPrefix = prefix + (isLast ? '    ' : '│   ');
@@ -108,10 +117,17 @@ function formatTreeNode(node: TreeNode, prefix: string = '', isLast: boolean = t
 
 /**
  * Generate a <file_map> ASCII tree structure for selected files
+ * @param selectedFiles Files that are selected
+ * @param allFiles All files in the repository (if not provided, uses selectedFiles)
+ * @param rootFolderName Optional root folder name
  */
-export function generateFileMap(selectedFiles: FileInfo[], rootFolderName?: string): string {
+export function generateFileMap(
+  selectedFiles: FileInfo[], 
+  rootFolderName?: string,
+  allFiles?: FileInfo[]
+): string {
   // Convert flat file list to tree structure
-  const fileTree = buildFileTree(selectedFiles);
+  const fileTree = buildFileTree(allFiles || selectedFiles, selectedFiles);
   
   // Set the root node name if provided
   if (rootFolderName) {
@@ -130,9 +146,10 @@ export function generateFileMap(selectedFiles: FileInfo[], rootFolderName?: stri
  */
 export function generateClipboardPayload(
   selectedFiles: FileInfo[],
-  rootFolderName?: string
+  rootFolderName?: string,
+  allFiles?: FileInfo[]
 ): string {
-  const fileMap = generateFileMap(selectedFiles, rootFolderName);
+  const fileMap = generateFileMap(selectedFiles, rootFolderName, allFiles);
   
   return `<file_map>\n${fileMap}</file_map>`;
 } 

@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { promisify } from 'util';
 import { createReadStream } from 'fs';
+import { IgnoreManager } from './ignoreUtils';
 
 // Utility to check if a file is likely binary
 function isLikelyBinary(filePath: string): boolean {
@@ -90,13 +91,27 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
   const ONE_MB = 1024 * 1024;
   
   try {
+    // Initialize and load the ignore manager
+    const ignoreManager = new IgnoreManager(folderPath);
+    await ignoreManager.loadIgnoreFile();
+    
     // Function to recursively walk directories
     async function walk(dir: string, baseDir: string): Promise<void> {
+      // Check if directory is ignored
+      if (ignoreManager.shouldIgnore(dir)) {
+        return;
+      }
+      
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
       
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         const relativePath = path.relative(baseDir, fullPath);
+        
+        // Check if this file/directory should be ignored
+        if (ignoreManager.shouldIgnore(fullPath)) {
+          continue;
+        }
         
         // Send progress update
         fileCount++;
@@ -176,7 +191,7 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
         totalTokens
       }
     };
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Error walking directory:', error);
     event.sender.send('directory:walkProgress', {
       error: true,
@@ -189,6 +204,19 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
 // Read file contents
 ipcMain.handle('file:readContent', async (_, filePath) => {
   try {
+    // Check if file is in an ignored directory
+    const dirPath = path.dirname(filePath);
+    const ignoreManager = new IgnoreManager(dirPath);
+    await ignoreManager.loadIgnoreFile();
+    
+    if (ignoreManager.shouldIgnore(filePath)) {
+      return {
+        content: '',
+        error: 'File is in an ignored directory',
+        isSkipped: true
+      };
+    }
+    
     const stats = await fs.promises.stat(filePath);
     
     // Skip binary files and large files

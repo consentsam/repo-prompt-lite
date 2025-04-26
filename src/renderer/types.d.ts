@@ -1,6 +1,2 @@
-interface Window {
-  api: {
-    selectFolder: () => Promise<string | null>;
-    verifyDroppedFolder: (path: string) => Promise<string | null>;
-  };
-} 
+// This file is intentionally left empty.
+// The Window interface is fully defined in types/api.d.ts 

@@ -9,15 +9,16 @@ import { generateFileMap } from './formatUtils';
  */
 export async function generateFullPrompt(
   selectedFiles: FileInfo[],
-  rootFolderName?: string
+  rootFolderName?: string,
+  allFiles?: FileInfo[]
 ): Promise<{
   prompt: string;
   success: boolean;
   error?: string;
   tokensApprox: number;
 }> {
-  // Generate the file map
-  const fileMap = generateFileMap(selectedFiles, rootFolderName);
+  // Generate the file map with all files, but marking selected ones
+  const fileMap = generateFileMap(selectedFiles, rootFolderName, allFiles);
   
   // Start building the prompt
   let prompt = `<file_map>\n${fileMap}</file_map>\n\n`;
@@ -26,7 +27,7 @@ export async function generateFullPrompt(
   let totalTokens = 0;
   const errors: string[] = [];
   
-  // Add file contents
+  // Add file contents only for selected files
   for (const file of selectedFiles) {
     if (file.isDirectory || file.isSkipped) continue;
     
@@ -65,7 +66,8 @@ export async function generateFullPrompt(
  */
 export async function copyPromptToClipboard(
   selectedFiles: FileInfo[],
-  rootFolderName?: string
+  rootFolderName?: string,
+  allFiles?: FileInfo[]
 ): Promise<{
   success: boolean;
   error?: string;
@@ -75,7 +77,8 @@ export async function copyPromptToClipboard(
     // Generate the full prompt
     const { prompt, success, error, tokensApprox } = await generateFullPrompt(
       selectedFiles,
-      rootFolderName
+      rootFolderName,
+      allFiles
     );
     
     if (!success) {

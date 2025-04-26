@@ -18,6 +18,7 @@
     "@tanstack/react-virtual": "^3.13.6",
     "clsx": "^2.1.0",
     "immer": "^10.1.1",
+    "micromatch": "^4.0.8",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },
@@ -26,6 +27,7 @@
     "@electron/remote": "^2.1.2",
     "@testing-library/jest-dom": "^6.4.1",
     "@testing-library/react": "^14.3.1",
+    "@types/micromatch": "^4.0.9",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.19",
     "electron": "^30.0.0",

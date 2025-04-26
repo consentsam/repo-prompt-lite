@@ -5,14 +5,15 @@ import { generateFileMap } from '../utils/formatUtils';
 interface FileMapPreviewProps {
   selectedFiles: FileInfo[];
   rootFolderName?: string;
+  allFiles?: FileInfo[];
 }
 
 /**
  * Component to preview the file map that will be generated
  */
-export default function FileMapPreview({ selectedFiles, rootFolderName }: FileMapPreviewProps): JSX.Element {
-  // Generate the file map
-  const fileMap = generateFileMap(selectedFiles, rootFolderName);
+export default function FileMapPreview({ selectedFiles, rootFolderName, allFiles }: FileMapPreviewProps): JSX.Element {
+  // Generate the file map with all files but highlight selected ones
+  const fileMap = generateFileMap(selectedFiles, rootFolderName, allFiles);
   
   // Split into lines to add line numbers
   const lines = fileMap.split('\n');

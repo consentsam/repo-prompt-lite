@@ -1,8 +1,11 @@
-import React, { useState, useMemo, useReducer } from 'react';
+import React, { useState, useMemo, useReducer, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import clsx from 'clsx';
-import { produce } from 'immer';
+import { produce, enableMapSet } from 'immer';
 import { FileInfo, CheckState, FlattenedFile } from '../types/common';
+
+// Enable Immer's MapSet plugin to work with Map and Set
+enableMapSet();
 
 // Icons for file and folder
 const FolderIcon = ({ isOpen }: { isOpen: boolean }) => (
@@ -92,6 +95,15 @@ export default function FileTree({
   onSelectionChange
 }: FileTreeProps): JSX.Element {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set([rootPath]));
+  
+  // Store previous selection to prevent unnecessary renders
+  const prevSelectionRef = React.useRef<string>('');
+  
+  // Track last clicked node and time for double-click detection
+  const lastClickedRef = React.useRef<{nodeId: string, time: number} | null>(null);
+  
+  // Track nodes waiting for double-click
+  const [doubleClickNodes, setDoubleClickNodes] = useState<Set<string>>(new Set());
   
   // Helper for path manipulation inside the component to access rootPath
   const path = {
@@ -263,7 +275,7 @@ export default function FileTree({
   }, [buildTree, selectionState.nodeStates]);
   
   // Get selected files when selection changes
-  React.useEffect(() => {
+  useEffect(() => {
     if (!onSelectionChange) return;
     
     const selectedFiles: FileInfo[] = [];
@@ -294,7 +306,14 @@ export default function FileTree({
       collectSelectedFiles(buildTree.children);
     }
     
-    onSelectionChange(selectedFiles);
+    // Generate a key for the current selection
+    const selectionKey = JSON.stringify(selectedFiles.map(f => f.path).sort());
+    
+    // Only call onSelectionChange if the selection has actually changed
+    if (prevSelectionRef.current !== selectionKey) {
+      prevSelectionRef.current = selectionKey;
+      onSelectionChange(selectedFiles);
+    }
   }, [selectionState.nodeStates, buildTree, onSelectionChange]);
   
   // Create a ref for the parent element
@@ -325,7 +344,46 @@ export default function FileTree({
   
   // Toggle selection of a node
   const toggleSelection = (node: FlattenedFile) => {
-    dispatchSelection({ type: 'TOGGLE_NODE', node });
+    // Special handling for binary/skipped files - require double click
+    if (!node.isDirectory && node.isSkipped) {
+      const now = Date.now();
+      const lastClicked = lastClickedRef.current;
+      
+      if (lastClicked && lastClicked.nodeId === node.id && now - lastClicked.time < 500) {
+        // Double click detected, allow selection
+        dispatchSelection({ type: 'TOGGLE_NODE', node });
+        lastClickedRef.current = null; // Reset after double click
+        
+        // Remove from double-click pending set
+        setDoubleClickNodes(prev => {
+          const updated = new Set(prev);
+          updated.delete(node.id);
+          return updated;
+        });
+      } else {
+        // First click, just record it
+        lastClickedRef.current = { nodeId: node.id, time: now };
+        
+        // Add to double-click pending set
+        setDoubleClickNodes(prev => {
+          const updated = new Set(prev);
+          updated.add(node.id);
+          return updated;
+        });
+        
+        // Auto-clear message after 2 seconds
+        setTimeout(() => {
+          setDoubleClickNodes(prev => {
+            const updated = new Set(prev);
+            updated.delete(node.id);
+            return updated;
+          });
+        }, 2000);
+      }
+    } else {
+      // Normal files and directories - single click is enough
+      dispatchSelection({ type: 'TOGGLE_NODE', node });
+    }
   };
   
   // Get the indentation based on level
@@ -350,6 +408,9 @@ export default function FileTree({
         >
           {rowVirtualizer.getVirtualItems().map(virtualRow => {
             const file = flattenTree[virtualRow.index];
+            
+            const needsDoubleClick = !file.isDirectory && file.isSkipped && doubleClickNodes.has(file.id);
+            
             return (
               <div
                 key={file.id}
@@ -390,6 +451,12 @@ export default function FileTree({
                     <span className="ml-2 text-xs text-gray-500">
                       {formatFileSize(file.size)}
                       {!file.isSkipped && file.tokenEstimate > 0 && ` • ${file.tokenEstimate.toLocaleString()} tokens`}
+                    </span>
+                  )}
+                  
+                  {needsDoubleClick && (
+                    <span className="ml-2 text-xs text-amber-400">
+                      Double-click to select
                     </span>
                   )}
                 </div>
