@@ -1,0 +1,83 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Canonical build plan with live status
+alwaysInclude: true
+maxTokens: 3000
+---
+
+> **Plan mode:** By default the assistant will pick the next unchecked step and follow this plan.  
+> **Bypass plan:** If your prompt contains the word `IGNORE IMPLEMENTATION PLAN` (case-insensitive), the plan will be skipped and your request will be executed directly.
+
+# Implementation Plan  <!-- EDIT IN PLACE -->
+
+## 0 Project Bootstrap
+- [x] **Step 0.1 – Scaffold Electron + React + TS workspace**  
+  - **Task**: Initialise with Electron 30, Vite, React 18, TypeScript, Tailwind (dark-mode only); add ESLint, Prettier & Husky.  
+  - **Files**: `package.json`, `electron.vite.config.ts`, `src/main/main.ts`, …  
+  - **Dependencies**: —  
+  - **Status**: ✅ done  
+  - **Notes**: Scaffolded initial workspace with Electron 30, React 18, TypeScript, and Tailwind; resolved module issues by switching to CJS configs; implemented minimal preload script.
+
+## 1 Folder Import & IPC
+- [x] **Step 1.1 – Folder-choose / drag-drop**  
+  - **Task**: `FolderPicker.tsx` UI; `ipcRenderer.invoke('pick')`; HTML5 drag-drop.  
+  - **Dependencies**: 0.1  
+  - **Status**: ✅ done  
+  - **Notes**: Created FolderPicker component with button and drag-drop functionality; implemented secure IPC communication for folder selection; added error handling and user feedback.
+
+- [x] **Step 1.2 – Directory walk (main-process)**  
+  - **Task**: Async recursive walker; stream progress; skip binaries; return rough token estimate per file.  
+  - **Dependencies**: 1.1  
+  - **Status**: ✅ done  
+  - **Notes**: Implemented async directory walker with binary detection, file size limits, progress streaming, and token estimation; created DirectoryScanner UI component for real-time feedback.
+
+## 2 Tree Rendering
+- [ ] **Step 2.1 – Virtualised file-tree**  
+  - **Task**: `@tanstack/react-virtual`; collapsible rows; Tailwind dark styling.  
+  - **Dependencies**: 1.2  
+  - **Status**: ⬜ pending  
+  - **Notes**: —
+
+- [ ] **Step 2.2 – Tri-state checkbox cascade**  
+  - **Task**: Reducer with `immer`; propagate checked / partial state.  
+  - **Dependencies**: 2.1  
+  - **Status**: ⬜ pending  
+  - **Notes**: —
+
+## 3 Copy Payload Generation
+- [ ] **Step 3.1 – Flatten selection**  
+  - **Task**: `getSelectedFiles()` util.  
+  - **Dependencies**: 2.2  
+  - **Status**: ⬜ pending  
+  - **Notes**: —
+- [ ] **Step 3.2 – Build `<file_map>`**  
+  - **Task**: ASCII tree formatter.  
+  - **Dependencies**: 3.1  
+  - **Status**: ⬜ pending  
+  - **Notes**: —
+- [ ] **Step 3.3 – Stream contents & clipboard write**  
+  - **Task**: Read selected files (UTF-8), enforce 2 M-token cap, write payload to clipboard.  
+  - **Dependencies**: 3.2  
+  - **Status**: ⬜ pending  
+  - **Notes**: —
+
+## 4 Edge-cases & Performance
+- [ ] **Step 4.1 – Binary / ≥ 1 MB filter** • Dependencies: 3.3  
+- [ ] **Step 4.2 – Lazy child loading** • Dependencies: 4.1  
+- [ ] **Step 4.3 – Live token counter in UI** • Dependencies: 4.2  
+
+## 5 UI Polish
+- [ ] **Step 5.1 – Toolbar hotkeys & collapse-all** • Dependencies: 4.3  
+
+## 6 Testing & QA
+- [ ] **Step 6.1 – Unit tests** • Dependencies: 5.1  
+- [ ] **Step 6.2 – Component tests** • Dependencies: 6.1  
+- [ ] **Step 6.3 – E2E Playwright tests** • Dependencies: 6.2  
+
+## 7 Packaging & Docs
+- [ ] **Step 7.1 – macOS `.dmg` build** • Dependencies: 6.3  
+- [ ] **Step 7.2 – README & CHANGELOG** • Dependencies: 7.1  

@@ -1,0 +1,18 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Ignore binaries & images when reading / copying files
+priority: lowest
+action: exclude
+globs:
+  - "**/*.png"
+  - "**/*.jpg"
+  - "**/*.jpeg"
+  - "**/*.gif"
+  - "**/*.pdf"
+  - "**/*.zip"
+  - "**/*.mp4"
+---

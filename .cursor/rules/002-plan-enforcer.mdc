@@ -1,0 +1,22 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Enforce step-by-step execution & automatic note-taking
+alwaysInclude: true
+maxTokens: 2000
+globs:
+  - "docs/step-notes/*.md"
+---
+
+## 📜 Rule
+1. **Before coding** load `001-implementation-plan.mdc` and pick the **first** unchecked step whose **Dependencies** are all `✅ done`.  
+2. Implement **only** that step.  
+3. **After** implementation:  
+   0. Ensure that you have tested all the functionality before moving to documenting
+   1. Create `docs/step-notes/{STEP_NUMBER}-<slug>.md` (STEP_NUMBER i.e. 0.1 , 1.1) containing **What / Testing / Follow-ups**.  
+   2. In the plan file tick the checkbox (`[x]`), set **Status** to `✅ done`, and write a brief sentence in **Notes**.  
+4. Do **not** start the next step until the previous one is documented.  
+5. Abort and ask the user if estimated payload > 1.8 M tokens (~90 % of cap).

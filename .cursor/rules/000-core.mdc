@@ -1,0 +1,25 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+---
+description: Project metadata & coding conventions
+alwaysInclude: true
+maxTokens: 1000
+---
+
+### Project
+“Repo Prompt-lite” — an Electron 30 + React 18 desktop utility  
+* Dark theme only  
+* Target **macOS** (`arm64`, `x64`) — **no Windows builds**  
+* Skip any binary file or any file ≥ 1 MB during copy
+
+### Coding Guidelines
+* Use Tailwind classes (`dark:` prefix already applied)  
+* Prefer React function components with hooks  
+* Unit tests: Vitest + RTL • E2E: Playwright
+
+### Token Budget
+Total `<file_contents>` must stay **≤ 2 M tokens** (≈ 8 MB plain text).  
+Warn and abort copy if the estimate exceeds 90 % of that.
