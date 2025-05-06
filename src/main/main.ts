@@ -4,30 +4,43 @@ import fs from 'fs';
 import { promisify } from 'util';
 import { createReadStream } from 'fs';
 import { IgnoreManager } from './ignoreUtils';
+import { 
+  isFileBinary, 
+  isLikelyBinaryByExtension, 
+  BinaryDetectionOptions, 
+  DEFAULT_BINARY_OPTIONS 
+} from './binaryDetection';
 
-// Utility to check if a file is likely binary
-function isLikelyBinary(filePath: string): boolean {
-  const extension = path.extname(filePath).toLowerCase();
-  const binaryExtensions = [
-    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.ico',
-    '.pdf', '.zip', '.gz', '.tar', '.rar', '.7z',
-    '.exe', '.dll', '.so', '.dylib',
-    '.mp3', '.mp4', '.avi', '.mov', '.flv', '.wmv',
-    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-    '.bin', '.dat', '.db', '.sqlite', '.class', '.obj'
-  ];
-  
-  return binaryExtensions.includes(extension);
+// Define the FileInfo interface
+interface FileInfo {
+  path: string;
+  relativePath: string;
+  size: number;
+  isDirectory: boolean;
+  isSkipped: boolean;
+  skipReason?: string;
+  tokenEstimate: number;
+  hasChildren?: boolean;
+  childrenLoaded?: boolean;
+  hasLazyChildren?: boolean;
 }
 
-// Rough token estimator (for text files)
+// Binary detection options - used throughout the app
+const binaryDetectionOptions: BinaryDetectionOptions = {
+  ...DEFAULT_BINARY_OPTIONS,
+  // Override defaults if needed
+};
+
+// Simple token estimator for text files
 function estimateTokens(content: string): number {
   // Very rough estimate: 4 chars per token (GPT tokenization is more complex)
   // This is a simplified approach
   return Math.ceil(content.length / 4);
 }
 
+// Function to create the main application window
 function createWindow() {
+  console.log("Creating the main window...");
   const win = new BrowserWindow({
     width: 800,
     height: 600,
@@ -39,33 +52,41 @@ function createWindow() {
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
+    console.log("Loading URL:", process.env.ELECTRON_RENDERER_URL);
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
+    console.log("Loading local file...");
     win.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 }
 
 // Handle folder selection dialog
 ipcMain.handle('dialog:openDirectory', async () => {
+  console.log("Opening directory dialog...");
   const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ['openDirectory'],
     title: 'Select a folder to import',
   });
   
   if (canceled) {
+    console.log("Directory selection canceled.");
     return null;
   }
   
+  console.log("Selected folder:", filePaths[0]);
   return filePaths[0];
 });
 
 // Verify dropped folder exists
 ipcMain.handle('verify:droppedFolder', async (_, folderPath) => {
+  console.log("Verifying dropped folder:", folderPath);
   try {
     const stats = await fs.promises.stat(folderPath);
     if (stats.isDirectory()) {
+      console.log("Valid directory:", folderPath);
       return folderPath;
     }
+    console.log("Not a directory:", folderPath);
     return null;
   } catch (error) {
     console.error('Error verifying dropped folder:', error);
@@ -74,21 +95,29 @@ ipcMain.handle('verify:droppedFolder', async (_, folderPath) => {
 });
 
 // Directory walker
-ipcMain.handle('directory:walk', async (event, folderPath) => {
+ipcMain.handle('directory:walk', async (event, folderPath, options = {}) => {
   const results: Array<{
     path: string;
     relativePath: string;
     size: number;
     isDirectory: boolean;
     isSkipped: boolean;
+    skipReason?: string;
     tokenEstimate: number;
   }> = [];
   
   let fileCount = 0;
   let totalSize = 0;
   let totalTokens = 0;
+  let skippedCount = 0;
+  let binaryCount = 0;
+  let sizeSkippedCount = 0;
   
-  const ONE_MB = 1024 * 1024;
+  // Customize binary detection options
+  const detectionOptions: BinaryDetectionOptions = {
+    ...binaryDetectionOptions,
+    ...options.binaryDetection,
+  };
   
   try {
     // Initialize and load the ignore manager
@@ -120,7 +149,10 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
             fileCount,
             totalSize,
             totalTokens,
-            processing: relativePath
+            processing: relativePath,
+            skippedCount,
+            binaryCount,
+            sizeSkippedCount
           });
         }
         
@@ -141,11 +173,28 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
             const fileSize = stats.size;
             totalSize += fileSize;
             
-            // Skip binary files and files ≥ 1MB
-            const shouldSkip = isLikelyBinary(fullPath) || fileSize >= ONE_MB;
+            // Determine if file should be skipped (binary or too large)
+            let isSkipped = false;
+            let skipReason = '';
+            
+            // Check for binary content
+            const binaryCheck = await isFileBinary(fullPath, detectionOptions);
+            
+            if (binaryCheck.isBinary) {
+              isSkipped = true;
+              skipReason = binaryCheck.details || 'Binary file';
+              
+              if (binaryCheck.reason === 'size') {
+                sizeSkippedCount++;
+              } else {
+                binaryCount++;
+              }
+              
+              skippedCount++;
+            }
             
             let tokenEstimate = 0;
-            if (!shouldSkip) {
+            if (!isSkipped) {
               try {
                 const content = await fs.promises.readFile(fullPath, 'utf8');
                 tokenEstimate = estimateTokens(content);
@@ -153,6 +202,10 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
               } catch (readError) {
                 // If we can't read as UTF-8, it's likely binary
                 console.error(`Error reading file ${fullPath}:`, readError);
+                isSkipped = true;
+                skipReason = 'Failed to read as text';
+                binaryCount++;
+                skippedCount++;
               }
             }
             
@@ -161,8 +214,9 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
               relativePath,
               size: fileSize,
               isDirectory: false,
-              isSkipped: shouldSkip,
-              tokenEstimate: shouldSkip ? 0 : tokenEstimate
+              isSkipped,
+              skipReason,
+              tokenEstimate: isSkipped ? 0 : tokenEstimate
             });
           } catch (statError) {
             console.error(`Error getting stats for ${fullPath}:`, statError);
@@ -179,6 +233,9 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
       totalSize,
       totalTokens,
       processing: 'Complete',
+      skippedCount,
+      binaryCount,
+      sizeSkippedCount,
       done: true
     });
     
@@ -188,7 +245,10 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
       stats: {
         fileCount,
         totalSize,
-        totalTokens
+        totalTokens,
+        skippedCount,
+        binaryCount,
+        sizeSkippedCount
       }
     };
   } catch (error) {
@@ -202,33 +262,37 @@ ipcMain.handle('directory:walk', async (event, folderPath) => {
 });
 
 // Read file contents
-ipcMain.handle('file:readContent', async (_, filePath) => {
+ipcMain.handle('file:readContent', async (_, filePath, options = {}) => {
+  console.log(`Reading file content: ${filePath}`);
   try {
-    // Check if file is in an ignored directory
-    const dirPath = path.dirname(filePath);
-    const ignoreManager = new IgnoreManager(dirPath);
-    await ignoreManager.loadIgnoreFile();
-    
-    if (ignoreManager.shouldIgnore(filePath)) {
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
       return {
         content: '',
-        error: 'File is in an ignored directory',
-        isSkipped: true
+        error: 'File does not exist',
+        isSkipped: true,
+        skipReason: 'not_found'
       };
     }
     
+    // Get file stats
     const stats = await fs.promises.stat(filePath);
     
-    // Skip binary files and large files
-    const ONE_MB = 1024 * 1024;
-    if (isLikelyBinary(filePath) || stats.size >= ONE_MB) {
+    // Check if file is binary using the binaryDetection utility
+    const binaryOptions = options.binaryDetection || DEFAULT_BINARY_OPTIONS;
+    const binaryCheck = await isFileBinary(filePath, binaryOptions);
+    
+    if (binaryCheck.isBinary) {
       return {
         content: '',
-        error: 'File is binary or too large',
-        isSkipped: true
+        error: binaryCheck.details || 'File is binary or too large',
+        isSkipped: true,
+        skipReason: binaryCheck.reason,
+        details: binaryCheck.details
       };
     }
     
+    // Read the file content
     const content = await fs.promises.readFile(filePath, 'utf8');
     return {
       content,
@@ -239,7 +303,134 @@ ipcMain.handle('file:readContent', async (_, filePath) => {
     return {
       content: '',
       error: error instanceof Error ? error.message : String(error),
-      isSkipped: true
+      isSkipped: true,
+      skipReason: 'error'
+    };
+  }
+});
+
+// Fetch directory children on demand
+ipcMain.handle('directory:fetchChildren', async (event, dirPath, detectionOptions = {}) => {
+  try {
+    const results: FileInfo[] = [];
+    let fileCount = 0;
+    let totalSize = 0;
+    let totalTokens = 0;
+    let skippedCount = 0;
+    let binaryCount = 0;
+    let sizeSkippedCount = 0;
+    
+    // Initialize ignore manager
+    const ignoreManager = new IgnoreManager(dirPath);
+    await ignoreManager.loadIgnoreFile();
+    
+    // Check if directory is ignored
+    if (ignoreManager.shouldIgnore(dirPath)) {
+      return {
+        children: [],
+        error: 'Directory is ignored'
+      };
+    }
+    
+    // Read directory entries
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    
+    // Process each entry
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      const relativePath = path.relative(path.dirname(dirPath), fullPath);
+      
+      // Check if this file/directory should be ignored
+      if (ignoreManager.shouldIgnore(fullPath)) {
+        continue;
+      }
+      
+      fileCount++;
+      
+      if (entry.isDirectory()) {
+        results.push({
+          path: fullPath,
+          relativePath,
+          size: 0,
+          isDirectory: true,
+          isSkipped: false,
+          tokenEstimate: 0,
+          hasChildren: true, // Mark as having children for lazy loading
+          childrenLoaded: false, // Mark that children aren't loaded yet
+          hasLazyChildren: true // Mark that this directory has unloaded children
+        });
+      } else {
+        try {
+          const stats = await fs.promises.stat(fullPath);
+          const fileSize = stats.size;
+          totalSize += fileSize;
+          
+          // Determine if file should be skipped (binary or too large)
+          let isSkipped = false;
+          let skipReason = '';
+          
+          // Check for binary content
+          const binaryCheck = await isFileBinary(fullPath, detectionOptions);
+          
+          if (binaryCheck.isBinary) {
+            isSkipped = true;
+            skipReason = binaryCheck.details || 'Binary file';
+            
+            if (binaryCheck.reason === 'size') {
+              sizeSkippedCount++;
+            } else {
+              binaryCount++;
+            }
+            
+            skippedCount++;
+          }
+          
+          let tokenEstimate = 0;
+          if (!isSkipped) {
+            try {
+              const content = await fs.promises.readFile(fullPath, 'utf8');
+              tokenEstimate = estimateTokens(content);
+              totalTokens += tokenEstimate;
+            } catch (readError) {
+              // If we can't read as UTF-8, it's likely binary
+              isSkipped = true;
+              skipReason = 'Failed to read as text';
+              binaryCount++;
+              skippedCount++;
+            }
+          }
+          
+          results.push({
+            path: fullPath,
+            relativePath,
+            size: fileSize,
+            isDirectory: false,
+            isSkipped,
+            skipReason,
+            tokenEstimate: isSkipped ? 0 : tokenEstimate
+          });
+        } catch (statError) {
+          console.error(`Error getting stats for ${fullPath}:`, statError);
+        }
+      }
+    }
+    
+    return {
+      children: results,
+      stats: {
+        fileCount,
+        totalSize,
+        totalTokens,
+        skippedCount,
+        binaryCount,
+        sizeSkippedCount
+      }
+    };
+  } catch (error) {
+    console.error('Error fetching directory children:', error);
+    return {
+      children: [],
+      error: error instanceof Error ? error.message : String(error)
     };
   }
 });
@@ -258,7 +449,156 @@ ipcMain.handle('clipboard:writePrompt', async (_, payload) => {
   }
 });
 
-app.whenReady().then(createWindow);
+// Define the return type for lazy directory loading
+interface LazyChildResult {
+  children: FileInfo[];
+  stats: {
+    fileCount: number;
+    totalSize: number;
+    totalTokens: number;
+    skippedCount: number;
+    binaryCount: number;
+    sizeSkippedCount: number;
+  };
+}
+
+// Register all IPC handlers to ensure correct communication between main and renderer processes
+function registerIpcHandlers() {
+  // Directory walker handler was already defined above
+
+  // Handler for lazy loading child directories
+  ipcMain.handle('directory:lazyLoadChildren', async (event, dirPath, options = {}) => {
+    console.log(`Lazy loading children for directory: ${dirPath}`);
+    try {
+      if (!fs.existsSync(dirPath)) {
+        return { error: 'Directory does not exist' };
+      }
+
+      const rootPath = dirPath;
+      const binaryOptions = options.binaryDetection || DEFAULT_BINARY_OPTIONS;
+      const ignoreManager = new IgnoreManager(rootPath);
+      await ignoreManager.loadIgnoreFile();
+      
+      let fileCount = 0;
+      let totalSize = 0;
+      let totalTokens = 0;
+      let skippedCount = 0;
+      let binaryCount = 0;
+      let sizeSkippedCount = 0;
+      
+      const children: FileInfo[] = [];
+      
+      // Read immediate children of the directory
+      const items = await fs.promises.readdir(dirPath);
+      
+      for (const item of items) {
+        const itemPath = path.join(dirPath, item);
+        const relativePath = path.relative(rootPath, itemPath);
+        
+        // Skip files and directories specified in ignore files
+        if (ignoreManager.shouldIgnore(itemPath)) {
+          continue;
+        }
+        
+        try {
+          const stats = await fs.promises.stat(itemPath);
+          
+          if (stats.isDirectory()) {
+            // For directories, just add them without recursion
+            children.push({
+              path: itemPath,
+              relativePath,
+              size: 0, // Will be updated when directory is loaded
+              isDirectory: true,
+              isSkipped: false,
+              tokenEstimate: 0,
+              hasLazyChildren: true // Mark that this directory has unloaded children
+            });
+          } else {
+            // For files, check if they're binary or too large
+            fileCount++;
+            
+            // Skip binary files and files larger than the limit
+            const fileSizeBytes = stats.size;
+            let isSkipped = false;
+            let skipReason = '';
+            
+            // Check file size first (faster than binary check)
+            const binaryCheck = await isFileBinary(itemPath, binaryOptions);
+            if (binaryCheck.isBinary) {
+              isSkipped = true;
+              skipReason = binaryCheck.details || 'Binary file';
+              
+              if (binaryCheck.reason === 'size') {
+                sizeSkippedCount++;
+              } else {
+                binaryCount++;
+              }
+              
+              skippedCount++;
+            }
+            
+            // Estimate tokens based on file size if not binary
+            let tokenEstimate = 0;
+            if (!isSkipped) {
+              try {
+                const content = await fs.promises.readFile(itemPath, 'utf8');
+                tokenEstimate = estimateTokens(content);
+                totalTokens += tokenEstimate;
+              } catch (readError) {
+                // If we can't read as UTF-8, it's likely binary
+                console.error(`Error reading file ${itemPath}:`, readError);
+                isSkipped = true;
+                skipReason = 'Failed to read as text';
+                binaryCount++;
+                skippedCount++;
+              }
+            }
+            
+            // Update totals
+            totalSize += fileSizeBytes;
+            
+            // Add file info
+            children.push({
+              path: itemPath,
+              relativePath,
+              size: fileSizeBytes,
+              isDirectory: false,
+              isSkipped,
+              skipReason,
+              tokenEstimate
+            });
+          }
+        } catch (err) {
+          console.error(`Error processing ${itemPath}:`, err);
+        }
+      }
+      
+      return {
+        children,
+        stats: {
+          fileCount,
+          totalSize,
+          totalTokens,
+          skippedCount,
+          binaryCount,
+          sizeSkippedCount
+        }
+      } as LazyChildResult;
+    } catch (error) {
+      console.error('Error in lazyLoadChildren:', error);
+      return { error: 'Failed to load directory children' };
+    }
+  });
+}
+
+// Call registerIpcHandlers when the app is ready
+app.whenReady().then(() => {
+  // Register all IPC handlers first
+  registerIpcHandlers();
+  // Then create the main window
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

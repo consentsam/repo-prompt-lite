@@ -14,8 +14,12 @@ export default function FolderPicker({ onFolderSelected }: FolderPickerProps): J
       setErrorMessage(null);
       const selectedFolder = await window.api.selectFolder();
       if (selectedFolder) {
+        console.log("Selected folder:", selectedFolder);
         setFolderPath(selectedFolder);
         onFolderSelected(selectedFolder);
+      } else {
+        console.error("No folder selected.");
+        setErrorMessage('Error selecting folder. Please try again.');
       }
     } catch (error) {
       console.error('Error selecting folder:', error);
@@ -48,7 +52,6 @@ export default function FolderPicker({ onFolderSelected }: FolderPickerProps): J
     const items = e.dataTransfer.items;
     
     if (items && items.length > 0) {
-      // We only handle the first dropped item
       const item = items[0];
       
       if (item.kind === 'file') {
@@ -56,22 +59,21 @@ export default function FolderPicker({ onFolderSelected }: FolderPickerProps): J
         
         if (entry && entry.isDirectory) {
           try {
-            // For macOS, we can try to get the actual file path
             const file = e.dataTransfer.files[0];
             const path = file.path;
             
             if (path) {
-              // Verify the path exists and is a directory using the main process
+              console.log("Verifying dropped folder:", path);
               const verifiedPath = await window.api.verifyDroppedFolder(path);
               
               if (verifiedPath) {
+                console.log("Folder verified:", verifiedPath);
                 setFolderPath(verifiedPath);
                 onFolderSelected(verifiedPath);
                 return;
               }
             }
             
-            // Fallback to just using the directory name if we can't get the full path
             setErrorMessage('Could not access the full folder path. Please use the Select Folder button instead.');
           } catch (error) {
             console.error('Error processing dropped folder:', error);

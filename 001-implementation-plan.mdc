@@ -1,17 +1,8 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
----
-description: Canonical build plan with live status
-alwaysInclude: true
-maxTokens: 3000
----
-
-> **Plan mode:** By default the assistant will pick the next unchecked step and follow this plan.  
-> **Bypass plan:** If your prompt contains the word `IGNORE IMPLEMENTATION PLAN` (case-insensitive), the plan will be skipped and your request will be executed directly.
-
 # Implementation Plan  <!-- EDIT IN PLACE -->
 
 ## 0 Project Bootstrap
@@ -59,11 +50,11 @@ maxTokens: 3000
   - **Dependencies**: 3.1  
   - **Status**: ✅ done  
   - **Notes**: Revamped the tree formatter with extensive customization options; created an interactive FileMap preview component; implemented file size and token calculation for directories; added options for sorting, filtering, and depth control.
-- [ ] **Step 3.3 – Stream contents & clipboard write**  
+- [x] **Step 3.3 – Stream contents & clipboard write**  
   - **Task**: Read selected files (UTF-8), enforce 2 M-token cap, write payload to clipboard.  
   - **Dependencies**: 3.2  
-  - **Status**: ⬜ pending  
-  - **Notes**: —
+  - **Status**: ✅ done  
+  - **Notes**: Implemented file content streaming with real-time progress tracking; added secure clipboard write functionality; enforced token cap with graceful handling; built comprehensive UI for operation progress and feedback.
 
 ## 4 Edge-cases & Performance
 - [ ] **Step 4.1 – Binary / ≥ 1 MB filter** • Dependencies: 3.3  
@@ -80,4 +71,4 @@ maxTokens: 3000
 
 ## 7 Packaging & Docs
 - [ ] **Step 7.1 – macOS `.dmg` build** • Dependencies: 6.3  
-- [ ] **Step 7.2 – README & CHANGELOG** • Dependencies: 7.1  
+- [ ] **Step 7.2 – README & CHANGELOG** • Dependencies: 7.1

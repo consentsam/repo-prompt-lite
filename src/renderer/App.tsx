@@ -1,8 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import FolderPicker from './components/FolderPicker';
 import DirectoryScanner from './components/DirectoryScanner';
 import FileTree from './components/FileTree';
 import FileMapPreview from './components/FileMapPreview';
+import SelectionStats from './components/SelectionStats';
+import TokenCounter from './components/TokenCounter';
+import Toolbar from './components/Toolbar';
 import clsx from 'clsx';
 import { FileInfo, ScanResults } from './types/common';
 import { 
@@ -12,10 +15,11 @@ import {
   getTokenUsagePercentage,
   formatNumber
 } from './utils/selectionUtils';
-import { copyPromptToClipboard } from './utils/promptUtils';
+import { copyPromptToClipboard, DEFAULT_PROMPT_OPTIONS, MAX_TOKEN_LIMIT } from './utils/promptUtils';
+import { TreeFormatOptions } from './utils/formatUtils';
 
-// Token limits
-const TOKEN_LIMIT = 2000000; // 2 million tokens
+// Token limits - sync with promptUtils
+const TOKEN_LIMIT = MAX_TOKEN_LIMIT; // 2 million tokens
 const WARNING_THRESHOLD = 90; // 90% of limit
 
 export default function App(): JSX.Element {
@@ -25,46 +29,119 @@ export default function App(): JSX.Element {
   const [showPreview, setShowPreview] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
   const [copyResult, setCopyResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showStats, setShowStats] = useState(true); // Show stats by default
+  const [fileMapOptions, setFileMapOptions] = useState<TreeFormatOptions>(DEFAULT_PROMPT_OPTIONS);
+  // New state for copy progress
+  const [copyProgress, setCopyProgress] = useState<{
+    current: number;
+    total: number;
+    fileName: string;
+    percentage: number;
+  } | null>(null);
+
+  // Reference to the FileTree component for expand/collapse methods
+  const fileTreeRef = React.useRef<{
+    expandAll: () => void;
+    collapseAll: () => void;
+    selectAll: () => void;
+    deselectAll: () => void;
+  } | null>(null);
+
+  console.log('App component rendered/re-rendered');
 
   const handleFolderSelected = (folderPath: string) => {
+    console.log('[App.tsx] handleFolderSelected called with path:', folderPath);
     setSelectedFolder(folderPath);
-    setScanResults(null); // Reset scan results when a new folder is selected
-    setSelectedFiles([]); // Reset selected files
+    setScanResults(null);
+    setSelectedFiles([]);
     setShowPreview(false);
     setCopyResult(null);
   };
 
   const handleScanComplete = (results: ScanResults) => {
+    console.log('[App.tsx] handleScanComplete. Total files scanned:', results.files.length);
     setScanResults(results);
-    console.log('Scan completed:', results);
   };
 
   const handleSelectionChange = (files: FileInfo[]) => {
-    setSelectedFiles(files);
-    console.log('Selected files:', files.length);
-    setShowPreview(false); // Hide preview when selection changes
-    setCopyResult(null); // Reset copy result when selection changes
+    console.log('[App.tsx] handleSelectionChange_RECEIVED_FROM_FILETREE:', {
+      count: files.length,
+      filesSample: files.slice(0, 3).map(f => ({ path: f.relativePath, tokens: f.tokenEstimate, isDir: f.isDirectory, isSkipped: f.isSkipped, size: f.size })),
+      allFilesReceived: files, // Log all if needed, but can be large
+    });
+    setSelectedFiles(files); // This triggers re-render and processedSelection recalculation
+    setShowPreview(false);
+    setCopyResult(null);
   };
+
+  useEffect(() => {
+    console.log('[App.tsx] selectedFiles state UPDATED:', {
+      count: selectedFiles.length,
+      filesSample: selectedFiles.slice(0, 3).map(f => ({ path: f.relativePath, tokens: f.tokenEstimate, isDir: f.isDirectory, isSkipped: f.isSkipped, size: f.size })),
+    });
+  }, [selectedFiles]);
 
   const togglePreview = () => {
+    console.log('[App.tsx] togglePreview called. Current showPreview:', showPreview);
     setShowPreview(prev => !prev);
+    if (!showPreview) setShowStats(false);
+  };
+  
+  const toggleStats = () => {
+    console.log('[App.tsx] toggleStats called. Current showStats:', showStats);
+    setShowStats(prev => !prev);
+    if (!showStats) setShowPreview(false);
   };
 
-  // Process the selection - memoize to avoid recomputing on every render
+  const expandAll = () => {
+    console.log('[App.tsx] expandAll called');
+    fileTreeRef.current?.expandAll();
+  };
+  
+  const collapseAll = () => {
+    console.log('[App.tsx] collapseAll called');
+    fileTreeRef.current?.collapseAll();
+  };
+  
+  const selectAll = () => {
+    console.log('[App.tsx] selectAll called');
+    fileTreeRef.current?.selectAll();
+  };
+  
+  const deselectAll = () => {
+    console.log('[App.tsx] deselectAll called');
+    fileTreeRef.current?.deselectAll();
+  };
+
+  const handleFileMapOptionsChange = (options: TreeFormatOptions) => {
+    console.log('[App.tsx] handleFileMapOptionsChange called with options:', options);
+    setFileMapOptions(options);
+  };
+
   const processedSelection = useMemo(() => {
+    console.log('[App.tsx] useMemo processedSelection recalculating. Input selectedFiles count:', selectedFiles.length);
     const filteredFiles = getSelectedFiles(selectedFiles);
     const totalTokens = getTotalTokenCount(filteredFiles);
     const tokenPercentage = getTokenUsagePercentage(filteredFiles, TOKEN_LIMIT);
     const exceedsLimit = isExceedingTokenLimit(filteredFiles, TOKEN_LIMIT);
     const isWarning = tokenPercentage >= WARNING_THRESHOLD;
-    
+
+    console.log('[App.tsx] useMemo processedSelection_RESULT:', {
+      inputCount: selectedFiles.length,
+      filteredCount: filteredFiles.length,
+      totalTokens,
+      // firstFilteredFile: filteredFiles[0] ? {path: filteredFiles[0].relativePath, tokens: filteredFiles[0].tokenEstimate} : null,
+      exceedsLimit: isExceedingTokenLimit(filteredFiles, TOKEN_LIMIT),
+      isWarning: getTokenUsagePercentage(filteredFiles, TOKEN_LIMIT) >= WARNING_THRESHOLD,
+      filesSample: filteredFiles.slice(0,3).map(f => ({ path: f.relativePath, tokens: f.tokenEstimate, isDir: f.isDirectory, isSkipped: f.isSkipped, size: f.size }))
+    });
     return {
       files: filteredFiles,
       count: filteredFiles.length,
       totalTokens,
-      tokenPercentage,
-      exceedsLimit,
-      isWarning
+      tokenPercentage: getTokenUsagePercentage(filteredFiles, TOKEN_LIMIT),
+      exceedsLimit: isExceedingTokenLimit(filteredFiles, TOKEN_LIMIT),
+      isWarning: getTokenUsagePercentage(filteredFiles, TOKEN_LIMIT) >= WARNING_THRESHOLD
     };
   }, [selectedFiles]);
 
@@ -76,22 +153,46 @@ export default function App(): JSX.Element {
 
   // Handle copying to clipboard
   const handleCopyToClipboard = async () => {
-    if (processedSelection.count === 0 || processedSelection.exceedsLimit) return;
+    console.log('[App.tsx] handleCopyToClipboard called. Processed selection count:', processedSelection.count, 'Exceeds limit:', processedSelection.exceedsLimit);
+    if (processedSelection.count === 0 || processedSelection.exceedsLimit) {
+      console.log('[App.tsx] CopyToClipboard aborted: no files or exceeds limit.');
+      return;
+    }
     
     setIsCopying(true);
     setCopyResult(null);
+    setCopyProgress(null);
     
     try {
+      // Track progress of file processing
+      const onProgress = (progress: {
+        current: number;
+        total: number;
+        fileName: string;
+        percentage: number;
+      }) => {
+        setCopyProgress(progress);
+      };
+      
       const result = await copyPromptToClipboard(
         processedSelection.files, 
         rootFolderName,
-        scanResults?.files  // Pass all files to show complete repo structure
+        scanResults?.files,  // Pass all files to show complete repo structure
+        fileMapOptions,      // Pass the current file map options
+        onProgress           // Pass the progress callback
       );
       
       if (result.success) {
+        let message = `Successfully copied ${result.processedFiles} files to clipboard!`;
+        
+        // Add info about token cap if it was exceeded
+        if (result.tokenCapExceeded) {
+          message += ` (${result.processedFiles}/${result.totalFiles} files, token limit reached)`;
+        }
+        
         setCopyResult({
           success: true,
-          message: `Successfully copied ${processedSelection.count} files to clipboard!`
+          message
         });
       } else {
         setCopyResult({
@@ -106,6 +207,7 @@ export default function App(): JSX.Element {
       });
     } finally {
       setIsCopying(false);
+      setCopyProgress(null);
     }
   };
 
@@ -126,56 +228,62 @@ export default function App(): JSX.Element {
 
         {scanResults && (
           <>
+            {/* Always show toolbar when scanResults are available */}
+            <Toolbar 
+              selectedFiles={processedSelection.files}
+              tokenLimit={TOKEN_LIMIT}
+              warningThreshold={WARNING_THRESHOLD}
+              onExpandAll={expandAll}
+              onCollapseAll={collapseAll}
+              onSelectAll={selectAll}
+              onDeselectAll={deselectAll}
+              onTogglePreview={togglePreview}
+              onToggleStats={toggleStats}
+              showPreview={showPreview}
+              showStats={showStats}
+              isCopying={isCopying}
+              onCopyToClipboard={handleCopyToClipboard}
+              exceedsLimit={processedSelection.count === 0 || processedSelection.exceedsLimit}
+            />
+            
             <FileTree 
               files={scanResults.files}
               rootPath={scanResults.rootPath}
               onSelectionChange={handleSelectionChange}
+              onFilesUpdate={(updatedFiles) => {
+                // Update scan results with lazy loaded files
+                setScanResults(prevResults => {
+                  if (!prevResults) return null;
+                  return {
+                    ...prevResults,
+                    files: updatedFiles
+                  };
+                });
+              }}
+              ref={fileTreeRef}
             />
             
             {processedSelection.count > 0 && (
-              <div className="mt-4 p-4 bg-gray-800 rounded-lg">
-                <div className="flex justify-between items-center mb-2">
-                  <h3 className="text-lg font-medium text-gray-200">Selection</h3>
-                  <span className={clsx(
-                    "text-sm",
-                    processedSelection.exceedsLimit ? "text-red-400" : 
-                    processedSelection.isWarning ? "text-yellow-400" : "text-gray-400"
-                  )}>
-                    {formatNumber(processedSelection.count)} files • {formatNumber(processedSelection.totalTokens)} tokens
-                    {' '}({processedSelection.tokenPercentage.toFixed(1)}% of limit)
-                  </span>
-                </div>
-                
-                {(processedSelection.isWarning || processedSelection.exceedsLimit) && (
-                  <div className={clsx(
-                    "mb-3 p-2 text-sm rounded",
-                    processedSelection.exceedsLimit 
-                      ? "bg-red-900/30 border border-red-700 text-red-400"
-                      : "bg-yellow-900/30 border border-yellow-700 text-yellow-400"
-                  )}>
-                    {processedSelection.exceedsLimit
-                      ? `Selection exceeds the ${formatNumber(TOKEN_LIMIT)} token limit. Please reduce your selection.`
-                      : `Selection is approaching the ${formatNumber(TOKEN_LIMIT)} token limit (${WARNING_THRESHOLD}%).`}
+              <div className="mt-4">
+                {/* Copy progress indicator */}
+                {isCopying && copyProgress && (
+                  <div className="mb-4 p-3 bg-blue-900/30 border border-blue-700 text-blue-300 rounded-md">
+                    <div className="flex justify-between mb-1">
+                      <span className="text-sm">Processing: {copyProgress.fileName}</span>
+                      <span className="text-sm">{copyProgress.current}/{copyProgress.total} files</span>
+                    </div>
+                    <div className="w-full bg-gray-700 rounded-full h-2.5">
+                      <div 
+                        className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-in-out" 
+                        style={{ width: `${copyProgress.percentage}%` }}
+                      ></div>
+                    </div>
                   </div>
                 )}
                 
-                <div className="mb-2 w-full bg-gray-700 rounded-full h-2 overflow-hidden">
-                  <div 
-                    className={clsx(
-                      "h-full", 
-                      processedSelection.exceedsLimit 
-                        ? "bg-red-600" 
-                        : processedSelection.isWarning 
-                          ? "bg-yellow-500" 
-                          : "bg-blue-600"
-                    )}
-                    style={{ width: `${Math.min(processedSelection.tokenPercentage, 100)}%` }}
-                  />
-                </div>
-                
                 {copyResult && (
                   <div className={clsx(
-                    "mb-3 p-2 text-sm rounded",
+                    "mb-4 p-3 text-sm rounded-md",
                     copyResult.success 
                       ? "bg-green-900/30 border border-green-700 text-green-400" 
                       : "bg-red-900/30 border border-red-700 text-red-400"
@@ -184,45 +292,25 @@ export default function App(): JSX.Element {
                   </div>
                 )}
                 
-                <div className="flex space-x-2">
-                  <button 
-                    className="px-4 py-2 bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={processedSelection.count === 0 || processedSelection.exceedsLimit || isCopying}
-                    onClick={handleCopyToClipboard}
-                  >
-                    {isCopying ? (
-                      <span className="flex items-center">
-                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Copying...
-                      </span>
-                    ) : "Copy to Clipboard"}
-                  </button>
-                  
-                  <button 
-                    className={clsx(
-                      "px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-gray-500 font-medium",
-                      showPreview
-                        ? "bg-gray-600 hover:bg-gray-700 text-gray-200"
-                        : "bg-gray-700 hover:bg-gray-600 text-gray-300"
-                    )}
-                    onClick={togglePreview}
-                    disabled={processedSelection.count === 0}
-                  >
-                    {showPreview ? 'Hide Preview' : 'Show Preview'}
-                  </button>
-                </div>
+                {/* Show the stats or preview based on user selection */}
+                {showStats && (
+                  <SelectionStats 
+                    selectedFiles={processedSelection.files}
+                    tokenLimit={TOKEN_LIMIT}
+                    warningThreshold={WARNING_THRESHOLD}
+                  />
+                )}
+                
+                {showPreview && (
+                  <FileMapPreview 
+                    selectedFiles={processedSelection.files}
+                    rootFolderName={rootFolderName}
+                    allFiles={scanResults?.files}
+                    options={fileMapOptions}
+                    onOptionsChange={handleFileMapOptionsChange}
+                  />
+                )}
               </div>
-            )}
-            
-            {showPreview && processedSelection.count > 0 && (
-              <FileMapPreview 
-                selectedFiles={processedSelection.files}
-                rootFolderName={rootFolderName}
-                allFiles={scanResults?.files}
-              />
             )}
           </>
         )}

@@ -63,51 +63,170 @@ class IgnoreManager {
     return false;
   }
 }
-function isLikelyBinary(filePath) {
+const BINARY_EXTENSIONS = [
+  // Images
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".tiff",
+  ".ico",
+  ".webp",
+  ".svg",
+  // Archives
+  ".zip",
+  ".gz",
+  ".tar",
+  ".rar",
+  ".7z",
+  ".jar",
+  ".war",
+  ".ear",
+  // Executables
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".bin",
+  ".apk",
+  ".app",
+  // Media
+  ".mp3",
+  ".mp4",
+  ".avi",
+  ".mov",
+  ".flv",
+  ".wmv",
+  ".wav",
+  ".ogg",
+  ".webm",
+  // Office documents
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".pdf",
+  // Database/binary data
+  ".db",
+  ".sqlite",
+  ".dat",
+  ".bin",
+  ".class",
+  ".obj",
+  ".o",
+  ".pyc",
+  // Font files
+  ".ttf",
+  ".woff",
+  ".woff2",
+  ".eot",
+  ".otf"
+];
+const DEFAULT_BINARY_OPTIONS = {
+  maxSizeBytes: 1024 * 1024,
+  // 1MB
+  checkContent: true,
+  checkExtension: true,
+  sampleSize: 512,
+  // Sample 512 bytes
+  binaryThreshold: 10
+  // 10% non-UTF8 characters
+};
+function isLikelyBinaryByExtension(filePath) {
   const extension = path.extname(filePath).toLowerCase();
-  const binaryExtensions = [
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".bmp",
-    ".tiff",
-    ".ico",
-    ".pdf",
-    ".zip",
-    ".gz",
-    ".tar",
-    ".rar",
-    ".7z",
-    ".exe",
-    ".dll",
-    ".so",
-    ".dylib",
-    ".mp3",
-    ".mp4",
-    ".avi",
-    ".mov",
-    ".flv",
-    ".wmv",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    ".bin",
-    ".dat",
-    ".db",
-    ".sqlite",
-    ".class",
-    ".obj"
-  ];
-  return binaryExtensions.includes(extension);
+  return BINARY_EXTENSIONS.includes(extension);
 }
+async function sampleFileContent(filePath, sampleSize = 512) {
+  return new Promise((resolve, reject) => {
+    try {
+      const fileStream = fs.createReadStream(filePath, {
+        encoding: "binary",
+        start: 0,
+        end: sampleSize - 1
+      });
+      let buffer = "";
+      let nonTextChars = 0;
+      fileStream.on("data", (chunk) => {
+        buffer += chunk;
+      });
+      fileStream.on("end", () => {
+        for (let i = 0; i < buffer.length; i++) {
+          const charCode = buffer.charCodeAt(i);
+          if (charCode === 0 || (charCode < 9 || charCode > 13 && charCode < 32)) {
+            nonTextChars++;
+          }
+        }
+        const nonTextPercentage = nonTextChars / buffer.length * 100;
+        const isBinary = nonTextPercentage > 10;
+        resolve({ isBinary, nonTextPercentage });
+      });
+      fileStream.on("error", (err) => {
+        reject(err);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+async function isFileBinary(filePath, options = DEFAULT_BINARY_OPTIONS) {
+  const mergedOptions = { ...DEFAULT_BINARY_OPTIONS, ...options };
+  try {
+    const stats = await fs.promises.stat(filePath);
+    if (stats.size > (mergedOptions.maxSizeBytes || 1024 * 1024)) {
+      return {
+        isBinary: true,
+        reason: "size",
+        details: `File exceeds maximum size (${formatFileSize(stats.size)})`
+      };
+    }
+    if (mergedOptions.checkExtension && isLikelyBinaryByExtension(filePath)) {
+      return {
+        isBinary: true,
+        reason: "extension",
+        details: `File has binary extension (${path.extname(filePath)})`
+      };
+    }
+    if (mergedOptions.checkContent) {
+      const { isBinary, nonTextPercentage } = await sampleFileContent(
+        filePath,
+        mergedOptions.sampleSize
+      );
+      if (isBinary) {
+        return {
+          isBinary: true,
+          reason: "content",
+          details: `Content appears to be binary (${nonTextPercentage.toFixed(1)}% non-text characters)`
+        };
+      }
+    }
+    return { isBinary: false };
+  } catch (error) {
+    console.error(`Error checking if file is binary: ${filePath}`, error);
+    return {
+      isBinary: true,
+      reason: "content",
+      details: `Error checking file: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+const binaryDetectionOptions = {
+  ...DEFAULT_BINARY_OPTIONS
+  // Override defaults if needed
+};
 function estimateTokens(content) {
   return Math.ceil(content.length / 4);
 }
 function createWindow() {
+  console.log("Creating the main window...");
   const win = new electron.BrowserWindow({
     width: 800,
     height: 600,
@@ -118,39 +237,53 @@ function createWindow() {
     }
   });
   if (process.env.ELECTRON_RENDERER_URL) {
+    console.log("Loading URL:", process.env.ELECTRON_RENDERER_URL);
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
+    console.log("Loading local file...");
     win.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 }
 electron.ipcMain.handle("dialog:openDirectory", async () => {
+  console.log("Opening directory dialog...");
   const { canceled, filePaths } = await electron.dialog.showOpenDialog({
     properties: ["openDirectory"],
     title: "Select a folder to import"
   });
   if (canceled) {
+    console.log("Directory selection canceled.");
     return null;
   }
+  console.log("Selected folder:", filePaths[0]);
   return filePaths[0];
 });
 electron.ipcMain.handle("verify:droppedFolder", async (_, folderPath) => {
+  console.log("Verifying dropped folder:", folderPath);
   try {
     const stats = await fs.promises.stat(folderPath);
     if (stats.isDirectory()) {
+      console.log("Valid directory:", folderPath);
       return folderPath;
     }
+    console.log("Not a directory:", folderPath);
     return null;
   } catch (error) {
     console.error("Error verifying dropped folder:", error);
     return null;
   }
 });
-electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
+electron.ipcMain.handle("directory:walk", async (event, folderPath, options = {}) => {
   const results = [];
   let fileCount = 0;
   let totalSize = 0;
   let totalTokens = 0;
-  const ONE_MB = 1024 * 1024;
+  let skippedCount = 0;
+  let binaryCount = 0;
+  let sizeSkippedCount = 0;
+  const detectionOptions = {
+    ...binaryDetectionOptions,
+    ...options.binaryDetection
+  };
   try {
     const ignoreManager = new IgnoreManager(folderPath);
     await ignoreManager.loadIgnoreFile();
@@ -171,7 +304,10 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
             fileCount,
             totalSize,
             totalTokens,
-            processing: relativePath
+            processing: relativePath,
+            skippedCount,
+            binaryCount,
+            sizeSkippedCount
           });
         }
         if (entry.isDirectory()) {
@@ -189,15 +325,31 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
             const stats = await fs.promises.stat(fullPath);
             const fileSize = stats.size;
             totalSize += fileSize;
-            const shouldSkip = isLikelyBinary(fullPath) || fileSize >= ONE_MB;
+            let isSkipped = false;
+            let skipReason = "";
+            const binaryCheck = await isFileBinary(fullPath, detectionOptions);
+            if (binaryCheck.isBinary) {
+              isSkipped = true;
+              skipReason = binaryCheck.details || "Binary file";
+              if (binaryCheck.reason === "size") {
+                sizeSkippedCount++;
+              } else {
+                binaryCount++;
+              }
+              skippedCount++;
+            }
             let tokenEstimate = 0;
-            if (!shouldSkip) {
+            if (!isSkipped) {
               try {
                 const content = await fs.promises.readFile(fullPath, "utf8");
                 tokenEstimate = estimateTokens(content);
                 totalTokens += tokenEstimate;
               } catch (readError) {
                 console.error(`Error reading file ${fullPath}:`, readError);
+                isSkipped = true;
+                skipReason = "Failed to read as text";
+                binaryCount++;
+                skippedCount++;
               }
             }
             results.push({
@@ -205,8 +357,9 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
               relativePath,
               size: fileSize,
               isDirectory: false,
-              isSkipped: shouldSkip,
-              tokenEstimate: shouldSkip ? 0 : tokenEstimate
+              isSkipped,
+              skipReason,
+              tokenEstimate: isSkipped ? 0 : tokenEstimate
             });
           } catch (statError) {
             console.error(`Error getting stats for ${fullPath}:`, statError);
@@ -220,6 +373,9 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
       totalSize,
       totalTokens,
       processing: "Complete",
+      skippedCount,
+      binaryCount,
+      sizeSkippedCount,
       done: true
     });
     return {
@@ -228,7 +384,10 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
       stats: {
         fileCount,
         totalSize,
-        totalTokens
+        totalTokens,
+        skippedCount,
+        binaryCount,
+        sizeSkippedCount
       }
     };
   } catch (error) {
@@ -240,25 +399,27 @@ electron.ipcMain.handle("directory:walk", async (event, folderPath) => {
     throw error;
   }
 });
-electron.ipcMain.handle("file:readContent", async (_, filePath) => {
+electron.ipcMain.handle("file:readContent", async (_, filePath, options = {}) => {
+  console.log(`Reading file content: ${filePath}`);
   try {
-    const dirPath = path.dirname(filePath);
-    const ignoreManager = new IgnoreManager(dirPath);
-    await ignoreManager.loadIgnoreFile();
-    if (ignoreManager.shouldIgnore(filePath)) {
+    if (!fs.existsSync(filePath)) {
       return {
         content: "",
-        error: "File is in an ignored directory",
-        isSkipped: true
+        error: "File does not exist",
+        isSkipped: true,
+        skipReason: "not_found"
       };
     }
     const stats = await fs.promises.stat(filePath);
-    const ONE_MB = 1024 * 1024;
-    if (isLikelyBinary(filePath) || stats.size >= ONE_MB) {
+    const binaryOptions = options.binaryDetection || DEFAULT_BINARY_OPTIONS;
+    const binaryCheck = await isFileBinary(filePath, binaryOptions);
+    if (binaryCheck.isBinary) {
       return {
         content: "",
-        error: "File is binary or too large",
-        isSkipped: true
+        error: binaryCheck.details || "File is binary or too large",
+        isSkipped: true,
+        skipReason: binaryCheck.reason,
+        details: binaryCheck.details
       };
     }
     const content = await fs.promises.readFile(filePath, "utf8");
@@ -271,7 +432,112 @@ electron.ipcMain.handle("file:readContent", async (_, filePath) => {
     return {
       content: "",
       error: error instanceof Error ? error.message : String(error),
-      isSkipped: true
+      isSkipped: true,
+      skipReason: "error"
+    };
+  }
+});
+electron.ipcMain.handle("directory:fetchChildren", async (event, dirPath, detectionOptions = {}) => {
+  try {
+    const results = [];
+    let fileCount = 0;
+    let totalSize = 0;
+    let totalTokens = 0;
+    let skippedCount = 0;
+    let binaryCount = 0;
+    let sizeSkippedCount = 0;
+    const ignoreManager = new IgnoreManager(dirPath);
+    await ignoreManager.loadIgnoreFile();
+    if (ignoreManager.shouldIgnore(dirPath)) {
+      return {
+        children: [],
+        error: "Directory is ignored"
+      };
+    }
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      const relativePath = path.relative(path.dirname(dirPath), fullPath);
+      if (ignoreManager.shouldIgnore(fullPath)) {
+        continue;
+      }
+      fileCount++;
+      if (entry.isDirectory()) {
+        results.push({
+          path: fullPath,
+          relativePath,
+          size: 0,
+          isDirectory: true,
+          isSkipped: false,
+          tokenEstimate: 0,
+          hasChildren: true,
+          // Mark as having children for lazy loading
+          childrenLoaded: false,
+          // Mark that children aren't loaded yet
+          hasLazyChildren: true
+          // Mark that this directory has unloaded children
+        });
+      } else {
+        try {
+          const stats = await fs.promises.stat(fullPath);
+          const fileSize = stats.size;
+          totalSize += fileSize;
+          let isSkipped = false;
+          let skipReason = "";
+          const binaryCheck = await isFileBinary(fullPath, detectionOptions);
+          if (binaryCheck.isBinary) {
+            isSkipped = true;
+            skipReason = binaryCheck.details || "Binary file";
+            if (binaryCheck.reason === "size") {
+              sizeSkippedCount++;
+            } else {
+              binaryCount++;
+            }
+            skippedCount++;
+          }
+          let tokenEstimate = 0;
+          if (!isSkipped) {
+            try {
+              const content = await fs.promises.readFile(fullPath, "utf8");
+              tokenEstimate = estimateTokens(content);
+              totalTokens += tokenEstimate;
+            } catch (readError) {
+              isSkipped = true;
+              skipReason = "Failed to read as text";
+              binaryCount++;
+              skippedCount++;
+            }
+          }
+          results.push({
+            path: fullPath,
+            relativePath,
+            size: fileSize,
+            isDirectory: false,
+            isSkipped,
+            skipReason,
+            tokenEstimate: isSkipped ? 0 : tokenEstimate
+          });
+        } catch (statError) {
+          console.error(`Error getting stats for ${fullPath}:`, statError);
+        }
+      }
+    }
+    return {
+      children: results,
+      stats: {
+        fileCount,
+        totalSize,
+        totalTokens,
+        skippedCount,
+        binaryCount,
+        sizeSkippedCount
+      }
+    };
+  } catch (error) {
+    console.error("Error fetching directory children:", error);
+    return {
+      children: [],
+      error: error instanceof Error ? error.message : String(error)
     };
   }
 });
@@ -287,7 +553,111 @@ electron.ipcMain.handle("clipboard:writePrompt", async (_, payload) => {
     };
   }
 });
-electron.app.whenReady().then(createWindow);
+function registerIpcHandlers() {
+  electron.ipcMain.handle("directory:lazyLoadChildren", async (event, dirPath, options = {}) => {
+    console.log(`Lazy loading children for directory: ${dirPath}`);
+    try {
+      if (!fs.existsSync(dirPath)) {
+        return { error: "Directory does not exist" };
+      }
+      const rootPath = dirPath;
+      const binaryOptions = options.binaryDetection || DEFAULT_BINARY_OPTIONS;
+      const ignoreManager = new IgnoreManager(rootPath);
+      await ignoreManager.loadIgnoreFile();
+      let fileCount = 0;
+      let totalSize = 0;
+      let totalTokens = 0;
+      let skippedCount = 0;
+      let binaryCount = 0;
+      let sizeSkippedCount = 0;
+      const children = [];
+      const items = await fs.promises.readdir(dirPath);
+      for (const item of items) {
+        const itemPath = path.join(dirPath, item);
+        const relativePath = path.relative(rootPath, itemPath);
+        if (ignoreManager.shouldIgnore(itemPath)) {
+          continue;
+        }
+        try {
+          const stats = await fs.promises.stat(itemPath);
+          if (stats.isDirectory()) {
+            children.push({
+              path: itemPath,
+              relativePath,
+              size: 0,
+              // Will be updated when directory is loaded
+              isDirectory: true,
+              isSkipped: false,
+              tokenEstimate: 0,
+              hasLazyChildren: true
+              // Mark that this directory has unloaded children
+            });
+          } else {
+            fileCount++;
+            const fileSizeBytes = stats.size;
+            let isSkipped = false;
+            let skipReason = "";
+            const binaryCheck = await isFileBinary(itemPath, binaryOptions);
+            if (binaryCheck.isBinary) {
+              isSkipped = true;
+              skipReason = binaryCheck.details || "Binary file";
+              if (binaryCheck.reason === "size") {
+                sizeSkippedCount++;
+              } else {
+                binaryCount++;
+              }
+              skippedCount++;
+            }
+            let tokenEstimate = 0;
+            if (!isSkipped) {
+              try {
+                const content = await fs.promises.readFile(itemPath, "utf8");
+                tokenEstimate = estimateTokens(content);
+                totalTokens += tokenEstimate;
+              } catch (readError) {
+                console.error(`Error reading file ${itemPath}:`, readError);
+                isSkipped = true;
+                skipReason = "Failed to read as text";
+                binaryCount++;
+                skippedCount++;
+              }
+            }
+            totalSize += fileSizeBytes;
+            children.push({
+              path: itemPath,
+              relativePath,
+              size: fileSizeBytes,
+              isDirectory: false,
+              isSkipped,
+              skipReason,
+              tokenEstimate
+            });
+          }
+        } catch (err) {
+          console.error(`Error processing ${itemPath}:`, err);
+        }
+      }
+      return {
+        children,
+        stats: {
+          fileCount,
+          totalSize,
+          totalTokens,
+          skippedCount,
+          binaryCount,
+          sizeSkippedCount
+        }
+      };
+    } catch (error) {
+      console.error("Error in lazyLoadChildren:", error);
+      return { error: "Failed to load directory children" };
+    }
+  });
+}
+electron.app.whenReady().then(() => {
+  registerIpcHandlers();
+  createWindow();
+});
 electron.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     electron.app.quit();
