@@ -31,13 +31,13 @@ alwaysApply: false
   - **Task**: `@tanstack/react-virtual`; collapsible rows; Tailwind dark styling.  
   - **Dependencies**: 1.2  
   - **Status**: ✅ done  
-  - **Notes**: Implemented virtualized file tree with @tanstack/react-virtual; added collapsible rows with double-click support; improved UI with grid layout and Tailwind styling; added Expand/Collapse All buttons.
+  - **Notes**: Implemented virtualized file tree with @tanstack/react-virtual; added collapsible rows with double-click support; improved UI with grid layout and Tailwind styling; added Expand/Collapse All buttons. _(Bug fix applied for row click interaction for expand/collapse)._
 
 - [x] **Step 2.2 – Tri-state checkbox cascade**  
   - **Task**: Reducer with `immer`; propagate checked / partial state.  
   - **Dependencies**: 2.1  
   - **Status**: ✅ done  
-  - **Notes**: Enhanced selection reducer with multiple actions using immer; implemented tri-state checkboxes with cascading behavior; added bulk selection features and accessibility improvements including keyboard navigation.
+  - **Notes**: Enhanced selection reducer with multiple actions using immer; implemented tri-state checkboxes with cascading behavior; added bulk selection features and accessibility improvements including keyboard navigation. _(Bug fix applied for row click interaction for file selection and related refactoring in `FileTree.tsx`)._
 
 ## 3 Copy Payload Generation
 - [x] **Step 3.1 – Flatten selection**  
@@ -50,11 +50,11 @@ alwaysApply: false
   - **Dependencies**: 3.1  
   - **Status**: ✅ done  
   - **Notes**: Revamped the tree formatter with extensive customization options; created an interactive FileMap preview component; implemented file size and token calculation for directories; added options for sorting, filtering, and depth control.
-- [x] **Step 3.3 – Stream contents & clipboard write**  
+- [ ] **Step 3.3 – Stream contents & clipboard write**  
   - **Task**: Read selected files (UTF-8), enforce 2 M-token cap, write payload to clipboard.  
   - **Dependencies**: 3.2  
   - **Status**: ✅ done  
-  - **Notes**: Implemented file content streaming with real-time progress tracking; added secure clipboard write functionality; enforced token cap with graceful handling; built comprehensive UI for operation progress and feedback.
+  - **Notes**: Implemented IPC to read selected files in main process, construct payload with `<file_path>` and `<file_contents>` tags, enforce 2M token cap (warning at 1.8M), and write to clipboard. Renderer calls IPC and displays status.
 
 ## 4 Edge-cases & Performance
 - [ ] **Step 4.1 – Binary / ≥ 1 MB filter** • Dependencies: 3.3  

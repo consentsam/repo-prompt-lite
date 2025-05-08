@@ -19,4 +19,8 @@ contextBridge.exposeInMainWorld('api', {
   checkBinaryStatus: (path: string, options?: any) => ipcRenderer.invoke('file:checkBinary', path, options),
   // Clipboard operations
   writeToClipboard: (payload: string) => ipcRenderer.invoke('clipboard:writePrompt', payload),
+  // Generate payload and copy to clipboard
+  generatePayloadAndCopy: (
+    selectedFiles: Array<{ path: string; relativePath: string; tokenEstimate: number; isDirectory: boolean; isSkipped: boolean }>
+  ) => ipcRenderer.invoke('generate-payload-and-copy', selectedFiles)
 }); 

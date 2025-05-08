@@ -653,6 +653,52 @@ function registerIpcHandlers() {
       return { error: "Failed to load directory children" };
     }
   });
+  electron.ipcMain.handle("generate-payload-and-copy", async (_, selectedFiles) => {
+    const MAX_TOKENS = 2e6;
+    const WARN_TOKENS_THRESHOLD = 18e5;
+    let currentTotalTokens = 0;
+    let payload = "";
+    let filesProcessedCount = 0;
+    let allFilesProcessed = true;
+    console.log("[Main] Received request to generate payload for an_array_of_selected_files_with_length:", selectedFiles.length);
+    for (const file of selectedFiles) {
+      if (file.isDirectory || file.isSkipped) {
+        continue;
+      }
+      if (currentTotalTokens + file.tokenEstimate > MAX_TOKENS) {
+        console.warn(`[Main] Token limit (${MAX_TOKENS}) reached. Stopping payload generation. Processed ${filesProcessedCount} files.`);
+        allFilesProcessed = false;
+        break;
+      }
+      try {
+        const content = await fs.promises.readFile(file.path, "utf-8");
+        payload += `<file_path>${file.relativePath}</file_path>
+<file_contents>
+${content}
+</file_contents>
+
+`;
+        currentTotalTokens += file.tokenEstimate;
+        filesProcessedCount++;
+        if (currentTotalTokens > WARN_TOKENS_THRESHOLD && allFilesProcessed) {
+          console.warn(`[Main] Payload approaching token limit. Current tokens: ${currentTotalTokens}`);
+        }
+      } catch (error) {
+        console.error(`[Main] Error reading file ${file.path}:`, error);
+      }
+    }
+    if (payload.length === 0 && selectedFiles.filter((f) => !f.isDirectory && !f.isSkipped).length > 0) {
+      console.warn("[Main] No payload generated, possibly due to all selected files exceeding token limit individually or read errors.");
+      return { success: false, message: "No content generated. Files might be too large or unreadable." };
+    }
+    if (payload.length > 0) {
+      electron.clipboard.writeText(payload.trim());
+      const message = allFilesProcessed ? `Successfully copied ${filesProcessedCount} files to clipboard.` : `Copied ${filesProcessedCount} files to clipboard. Token limit reached, some files may have been excluded.`;
+      console.log(`[Main] ${message} Total tokens: ${currentTotalTokens}`);
+      return { success: true, message, CANCELED_BECAUSE_TOO_LARGE_BOOLEAN: !allFilesProcessed, tokens: currentTotalTokens };
+    }
+    return { success: false, message: "No files selected or processed." };
+  });
 }
 electron.app.whenReady().then(() => {
   registerIpcHandlers();

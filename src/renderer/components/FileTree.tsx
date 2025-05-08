@@ -236,52 +236,62 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
       return pathString.split('/').pop() || pathString;
     },
     dirname: (pathString: string) => {
-      if (!pathString.includes('/')) return rootPath;
-      return pathString.split('/').slice(0, -1).join('/') || rootPath;
+      if (!pathString.includes('/')) return ''; // Return empty string for top-level relative paths
+      return pathString.split('/').slice(0, -1).join('/');
     }
   };
   
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set([rootPath]));
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set<string>()); // Initialize as empty
   const [loadedDirectories, setLoadedDirectories] = useState<Set<string>>(new Set());
   const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(new Set());
   
   // Convert FileInfo objects to FlattenedFile objects
-  const buildFlattenedTree = (files: FileInfo[], rootPath: string): FlattenedFile[] => {
-    console.log('[FileTree.tsx] buildFlattenedTree called with', files.length, 'files');
-    
+  const buildFlattenedTree = (filesToFlatten: FileInfo[], _currentRootPathIgnored: string): FlattenedFile[] => {
+    logDebug('[FileTree.tsx] buildFlattenedTree called with', filesToFlatten.length, 'files.');
     const result: FlattenedFile[] = [];
-    const idMap = new Map<string, FlattenedFile>();
     
-    // First pass: create nodes
-    files.forEach(file => {
-      const relativePath = file.relativePath;
-      const level = relativePath.split('/').length - 1;
-      const parentPath = level === 0 ? rootPath : pathUtils.dirname(file.path);
-      
-      const node: FlattenedFile = {
-        ...file,
-        id: file.path,
-        level,
-        parentId: parentPath !== file.path ? parentPath : null,
-        children: file.isDirectory ? [] : undefined
-      };
-      
-      idMap.set(node.id, node);
-      result.push(node);
-    });
-    
-    // Second pass: build tree structure
-    result.forEach(node => {
-      if (node.parentId) {
-        const parent = idMap.get(node.parentId);
-        if (parent && parent.children) {
-          parent.children.push(node);
-        }
+    // Sort files by relativePath to ensure consistent order (parents usually before children)
+    const sortedFiles = [...filesToFlatten].sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+
+    for (const file of sortedFiles) {
+      const pathSegments = file.relativePath.split('/');
+      const level = Math.max(0, pathSegments.length - 1);
+      const name = pathSegments[pathSegments.length - 1] || file.relativePath; // Use relativePath if name is empty (e.g. root folder if it was a node)
+
+      let parentId: string | null = null;
+      if (pathSegments.length > 1) {
+        parentId = pathSegments.slice(0, -1).join('/');
       }
-    });
-    
+
+      result.push({
+        id: file.relativePath, // Use relativePath as the unique ID for nodes
+        parentId: parentId,
+        path: file.path, // Absolute path
+        relativePath: file.relativePath,
+        name: name,
+        level: level,
+        isDirectory: file.isDirectory,
+        isSkipped: file.isSkipped,
+        skipReason: file.skipReason,
+        size: file.size,
+        tokenEstimate: file.tokenEstimate,
+        hasLazyChildren: file.hasLazyChildren,
+        // isExpanded and checkState will be managed by component state/reducer elsewhere
+      });
+    }
+    logDebug('[FileTree.tsx] buildFlattenedTree produced', result.length, 'nodes.');
     return result;
   };
+
+  // Memoize the flattened tree structure
+  const flattenedNodes = useMemo(() => {
+    logDebug('[FileTree.tsx] Memoizing flattenedNodes. Files count:', files.length, 'Root path:', rootPath);
+    if (!files || files.length === 0) {
+      logDebug('[FileTree.tsx] No files to process for flattening.');
+      return [];
+    }
+    return buildFlattenedTree(files, rootPath);
+  }, [files, rootPath]);
   
   // Selection reducer to handle the tri-state checkboxes
   const selectionReducer = (state: SelectionState, action: SelectionAction): SelectionState => {
@@ -387,12 +397,6 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
     nodeStates: new Map<string, CheckState>()
   });
   
-  // Build a flattened representation of the file tree
-  const memoizedAllNodes = useMemo(() => {
-    console.log('[FileTree.tsx] Calculating memoizedAllNodes with', files.length, 'files');
-    return buildFlattenedTree(files, rootPath);
-  }, [files, rootPath]);
-  
   // Filtered list of visible nodes based on expanded state
   const flattenedVisibleNodes = useMemo(() => {
     console.log('[FileTree.tsx] Calculating flattenedVisibleNodes');
@@ -410,7 +414,7 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
       
       while (current.parentId) {
         // If we can't find the parent in our list of nodes, the node isn't visible
-        const parent = memoizedAllNodes.find(n => n.id === current.parentId);
+        const parent = flattenedNodes.find(n => n.id === current.parentId);
         if (!parent) return false;
         
         pathToRoot.push(parent.id);
@@ -426,27 +430,27 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
     };
     
     // Filter nodes based on visibility
-    memoizedAllNodes.forEach(node => {
+    flattenedNodes.forEach(node => {
       if (isVisible(node)) {
         visibleNodes.push(node);
       }
     });
     
-    console.log(`[FileTree.tsx] flattenedVisibleNodes calculated: ${visibleNodes.length} visible out of ${memoizedAllNodes.length} total`);
+    console.log(`[FileTree.tsx] flattenedVisibleNodes calculated: ${visibleNodes.length} visible out of ${flattenedNodes.length} total`);
     return visibleNodes;
-  }, [memoizedAllNodes, expandedNodes]);
+  }, [flattenedNodes, expandedNodes]);
   
   // Initialize selection state when files change
   useEffect(() => {
-    console.log('[FileTree.tsx] Initializing selection state for', memoizedAllNodes.length, 'nodes');
+    console.log('[FileTree.tsx] Initializing selection state for', flattenedNodes.length, 'nodes');
     
     const initialNodeStates = new Map<string, CheckState>();
-    memoizedAllNodes.forEach(node => {
+    flattenedNodes.forEach(node => {
       initialNodeStates.set(node.id, 'unchecked');
     });
     
     dispatchSelection({ type: 'INITIALIZE_STATES', initialStates: initialNodeStates });
-  }, [memoizedAllNodes]);
+  }, [flattenedNodes]);
   
   // Update App.tsx with selected files whenever selection changes
   useEffect(() => {
@@ -456,7 +460,7 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
       // Collect all selected files (no directories, no skipped files)
       const selectedFiles: FileInfo[] = [];
       
-      memoizedAllNodes.forEach(node => {
+      flattenedNodes.forEach(node => {
         const state = selectionState.nodeStates.get(node.id);
         if (state === 'checked' && !node.isDirectory && !node.isSkipped) {
           selectedFiles.push({
@@ -476,7 +480,7 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
       
       onSelectionChange(selectedFiles);
     }
-  }, [selectionState.nodeStates, onSelectionChange, memoizedAllNodes]);
+  }, [selectionState.nodeStates, onSelectionChange, flattenedNodes]);
   
   // Expose methods via ref to parent components
   useImperativeHandle(ref, () => ({
@@ -484,7 +488,7 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
       console.log('[FileTree.tsx] expandAll called');
       const allDirIds = new Set<string>();
       
-      memoizedAllNodes.forEach(node => {
+      flattenedNodes.forEach(node => {
         if (node.isDirectory) {
           allDirIds.add(node.id);
         }
@@ -496,18 +500,17 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
     
     collapseAll: () => {
       console.log('[FileTree.tsx] collapseAll called');
-      // Keep only root expanded
-      setExpandedNodes(new Set([rootPath]));
+      setExpandedNodes(new Set<string>()); // Collapse all by setting to an empty set
     },
     
     selectAll: () => {
       console.log('[FileTree.tsx] selectAll called');
-      dispatchSelection({ type: 'SELECT_ALL', nodes: memoizedAllNodes });
+      dispatchSelection({ type: 'SELECT_ALL', nodes: flattenedNodes });
     },
     
     deselectAll: () => {
       console.log('[FileTree.tsx] deselectAll called');
-      dispatchSelection({ type: 'DESELECT_ALL', nodes: memoizedAllNodes });
+      dispatchSelection({ type: 'DESELECT_ALL', nodes: flattenedNodes });
     }
   }));
   
@@ -553,7 +556,7 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
     let totalSize = 0;
     let count = 0;
     
-    memoizedAllNodes.forEach(node => {
+    flattenedNodes.forEach(node => {
       const state = selectionState.nodeStates.get(node.id);
       if (state === 'checked' && !node.isDirectory && !node.isSkipped) {
         totalSize += node.size;
@@ -563,48 +566,108 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
     
     console.log(`[FileTree.tsx] Selected data: ${count} files, ${formatFileSize(totalSize)}`);
     return { totalSize, count };
-  }, [selectionState.nodeStates, memoizedAllNodes]);
+  }, [selectionState.nodeStates, flattenedNodes]);
   
   // Render a row for a file or directory
   const renderRow = (index: number, virtualRow: any) => {
     const node = flattenedVisibleNodes[index];
-    if (!node) return null;
+
+    if (!node) {
+      return <div key={virtualRow.key} style={{ height: `${virtualRow.size}px` }} />;
+    }
     
-    const nodeState = selectionState.nodeStates.get(node.id) || 'unchecked';
-    const isExpanded = node.isDirectory && expandedNodes.has(node.id);
+    const nodeState = selectionState.nodeStates.get(node.relativePath) || 'unchecked';
+    const isExpanded = node.isDirectory && expandedNodes.has(node.relativePath);
+
+    // Main click handler for the entire row
+    const handleRowClick = () => {
+      logDebug('[FileTree.tsx] Row clicked:', node.relativePath, 'Is directory:', node.isDirectory);
+      if (node.isDirectory) {
+        // For directories, clicking anywhere on the row (except checkbox/chevron) toggles expansion
+        toggleNodeExpand(node);
+      } else {
+        // For files, clicking anywhere on the row (except checkbox) toggles selection
+        toggleNodeSelection(node);
+      }
+    };
     
     return (
       <div
-        className="flex items-center w-full py-1 px-2 hover:bg-gray-700/50 cursor-pointer"
+        key={node.relativePath}
+        ref={virtualRow.measureElement}
+        data-index={virtualRow.index}
+        className={clsx(
+          "flex items-center p-1.5 hover:bg-gray-700 cursor-pointer select-none",
+        )}
         style={{
           position: 'absolute',
           top: 0,
           left: 0,
           width: '100%',
-          height: virtualRow.size,
-          transform: `translateY(${virtualRow.start}px)`
+          height: `${virtualRow.size}px`,
+          transform: `translateY(${virtualRow.start}px)`,
+          paddingLeft: `${node.level * 20 + 5}px`,
         }}
-        onClick={() => toggleNodeExpand(node)}
-        key={node.id}
+        onClick={handleRowClick}
+        onDoubleClick={() => {
+          if (node.isDirectory) {
+            toggleNodeExpand(node);
+          }
+        }}
+        role="treeitem"
+        aria-expanded={node.isDirectory ? isExpanded : undefined}
+        aria-selected={nodeState === 'checked' || nodeState === 'indeterminate'}
+        aria-level={node.level + 1}
+        aria-label={`${node.name}${node.isDirectory ? ' (directory)' : ' (file)'}`}
       >
-        <div style={{ paddingLeft: `${node.level * 20}px` }} className="flex items-center min-w-0 flex-grow">
+        <div className="flex items-center flex-grow min-w-0">
           {node.isDirectory && (
+            <button 
+              onClick={(e) => {
+                e.stopPropagation(); // IMPORTANT: Prevent row click when chevron is clicked
+                toggleNodeExpand(node);
+              }}
+              className="mr-1 p-0.5 rounded hover:bg-gray-600"
+              aria-label={isExpanded ? 'Collapse' : 'Expand'}
+            >
             <ChevronIcon isOpen={isExpanded} />
+            </button>
           )}
+          
           <TriStateCheckbox
             state={nodeState}
-            onChange={() => toggleNodeSelection(node)}
+            onChange={() => {
+              // This already has stopPropagation in its own implementation
+              logDebug('[FileTree.tsx] Checkbox changed for:', node.relativePath);
+              toggleNodeSelection(node);
+            }}
           />
-          {node.isDirectory ? (
-            <FolderIcon isOpen={isExpanded} />
-          ) : (
-            <FileIcon file={node} />
+
+          {node.isDirectory 
+            ? <FolderIcon isOpen={isExpanded} /> 
+            : <FileIcon file={node} />}
+            
+          <span 
+            className={clsx("ml-1 truncate", {
+              "text-gray-400": node.isSkipped && node.skipReason !== 'error' && node.skipReason !== 'size',
+              "text-yellow-500": node.isSkipped && (node.skipReason === 'extension' || node.skipReason === 'content'),
+              "text-red-500": node.isSkipped && (node.skipReason === 'size' || node.skipReason === 'error'),
+            })}
+            title={node.relativePath}
+          >
+            {node.name}
+          </span>
+          {node.tokenEstimate !== undefined && (
+            <span className="ml-2 text-xs text-gray-500">
+              ({node.tokenEstimate} tokens)
+            </span>
           )}
-          <span className="ml-1.5 truncate">{pathUtils.basename(node.relativePath)}</span>
-          {node.isSkipped && <SkipReasonIndicator file={node} />}
+          <SkipReasonIndicator file={node} />
         </div>
-        {!node.isDirectory && (
-          <span className="ml-auto text-xs text-gray-500 tabular-nums">{formatFileSize(node.size)}</span>
+        {!node.isDirectory && node.size !== undefined && (
+          <span className="ml-auto text-sm text-gray-500 pr-2">
+            {formatFileSize(node.size)}
+          </span>
         )}
       </div>
     );
@@ -620,9 +683,9 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
             checked={selectedData.count > 0}
             onChange={() => {
               if (selectedData.count > 0) {
-                dispatchSelection({ type: 'DESELECT_ALL', nodes: memoizedAllNodes });
+                dispatchSelection({ type: 'DESELECT_ALL', nodes: flattenedNodes });
               } else {
-                dispatchSelection({ type: 'SELECT_ALL', nodes: memoizedAllNodes });
+                dispatchSelection({ type: 'SELECT_ALL', nodes: flattenedNodes });
               }
             }}
           />

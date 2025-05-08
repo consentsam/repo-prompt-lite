@@ -17,5 +17,7 @@ electron.contextBridge.exposeInMainWorld("api", {
   readFileContent: (path, options) => electron.ipcRenderer.invoke("file:readContent", path, options),
   checkBinaryStatus: (path, options) => electron.ipcRenderer.invoke("file:checkBinary", path, options),
   // Clipboard operations
-  writeToClipboard: (payload) => electron.ipcRenderer.invoke("clipboard:writePrompt", payload)
+  writeToClipboard: (payload) => electron.ipcRenderer.invoke("clipboard:writePrompt", payload),
+  // Generate payload and copy to clipboard
+  generatePayloadAndCopy: (selectedFiles) => electron.ipcRenderer.invoke("generate-payload-and-copy", selectedFiles)
 });

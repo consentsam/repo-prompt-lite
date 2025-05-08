@@ -22,6 +22,14 @@ import { TreeFormatOptions } from './utils/formatUtils';
 const TOKEN_LIMIT = MAX_TOKEN_LIMIT; // 2 million tokens
 const WARNING_THRESHOLD = 90; // 90% of limit
 
+// Type for the response from the main process
+interface CopyPayloadResponse {
+  success: boolean;
+  message: string;
+  CANCELED_BECAUSE_TOO_LARGE_BOOLEAN?: boolean;
+  tokens?: number;
+}
+
 export default function App(): JSX.Element {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [scanResults, setScanResults] = useState<ScanResults | null>(null);
@@ -153,61 +161,63 @@ export default function App(): JSX.Element {
 
   // Handle copying to clipboard
   const handleCopyToClipboard = async () => {
-    console.log('[App.tsx] handleCopyToClipboard called. Processed selection count:', processedSelection.count, 'Exceeds limit:', processedSelection.exceedsLimit);
-    if (processedSelection.count === 0 || processedSelection.exceedsLimit) {
-      console.log('[App.tsx] CopyToClipboard aborted: no files or exceeds limit.');
+    console.log('[App.tsx] handleCopyToClipboard called. Processed selection count:', processedSelection.count);
+    if (processedSelection.count === 0) {
+      setCopyResult({
+        success: false,
+        message: 'No files selected to copy.'
+      });
+      console.log('[App.tsx] CopyToClipboard aborted: no files selected.');
       return;
     }
-    
+    // Warning for exceeding limit is handled by disabling the button via `exceedsLimit` prop in Toolbar
+    // but we can double-check here if needed, though the main process will enforce the hard cap.
+
     setIsCopying(true);
     setCopyResult(null);
-    setCopyProgress(null);
-    
+    // setCopyProgress(null); // Progress from main process is not yet implemented
+
     try {
-      // Track progress of file processing
-      const onProgress = (progress: {
-        current: number;
-        total: number;
-        fileName: string;
-        percentage: number;
-      }) => {
-        setCopyProgress(progress);
-      };
-      
-      const result = await copyPromptToClipboard(
-        processedSelection.files, 
-        rootFolderName,
-        scanResults?.files,  // Pass all files to show complete repo structure
-        fileMapOptions,      // Pass the current file map options
-        onProgress           // Pass the progress callback
-      );
-      
+      // Ensure selected files have all necessary properties for the IPC call
+      const filesToCopy = processedSelection.files.map(f => ({
+        path: f.path, // Full path to the file
+        relativePath: f.relativePath, // Path relative to the project root
+        tokenEstimate: f.tokenEstimate,
+        isDirectory: f.isDirectory,
+        isSkipped: f.isSkipped, // Ensure this is accurate
+      }));
+
+      console.log('[App.tsx] Invoking "generate-payload-and-copy" with an_array_of_files_with_length:', filesToCopy.length);
+      // log filesToCopy sample
+      if (filesToCopy.length > 0) {
+        console.log('[App.tsx] Sample file to copy:', filesToCopy[0]);
+      }
+
+      // Call the main process to generate payload and copy to clipboard
+      const result: CopyPayloadResponse = await window.api.generatePayloadAndCopy(filesToCopy);
+
+      console.log('[App.tsx] Received response from "generate-payload-and-copy":', result);
+
       if (result.success) {
-        let message = `Successfully copied ${result.processedFiles} files to clipboard!`;
-        
-        // Add info about token cap if it was exceeded
-        if (result.tokenCapExceeded) {
-          message += ` (${result.processedFiles}/${result.totalFiles} files, token limit reached)`;
-        }
-        
         setCopyResult({
           success: true,
-          message
+          message: result.message
         });
       } else {
         setCopyResult({
           success: false,
-          message: result.error || 'Failed to copy to clipboard.'
+          message: result.message || 'Failed to copy payload to clipboard.'
         });
       }
     } catch (error) {
+      console.error('[App.tsx] Error during handleCopyToClipboard:', error);
       setCopyResult({
         success: false,
-        message: error instanceof Error ? error.message : 'An unknown error occurred.'
+        message: error instanceof Error ? error.message : 'An unknown error occurred while communicating with the main process.'
       });
     } finally {
       setIsCopying(false);
-      setCopyProgress(null);
+      // setCopyProgress(null);
     }
   };
 

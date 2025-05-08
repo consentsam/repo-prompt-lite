@@ -45,6 +45,9 @@ interface API {
   readFileContent: (path: string) => Promise<FileContentResult>;
   writeToClipboard: (payload: string) => Promise<ClipboardResult>;
   onWalkProgress: (callback: (data: ScanProgressData) => void) => (() => void) | undefined;
+  lazyLoadChildren: (path: string, options?: any) => Promise<any>;
+  checkBinaryStatus: (path: string, options?: any) => Promise<any>;
+  generatePayloadAndCopy: (selectedFiles: Array<{ path: string; relativePath: string; tokenEstimate: number; isDirectory: boolean; isSkipped: boolean }>) => Promise<any>;
 }
 
 declare global {
