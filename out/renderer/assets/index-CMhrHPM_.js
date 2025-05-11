@@ -9359,46 +9359,50 @@ const logDebug = (message, ...data) => {
 const FileTree = reactExports.forwardRef((props, ref) => {
   const { files, rootPath, onSelectionChange, onFilesUpdate } = props;
   console.log("[FileTree.tsx] Rendering with files:", files.length, "Root path:", rootPath);
-  const pathUtils = {
-    basename: (pathString) => {
-      return pathString.split("/").pop() || pathString;
-    },
-    dirname: (pathString) => {
-      if (!pathString.includes("/")) return rootPath;
-      return pathString.split("/").slice(0, -1).join("/") || rootPath;
-    }
-  };
-  const [expandedNodes, setExpandedNodes] = reactExports.useState(/* @__PURE__ */ new Set([rootPath]));
+  const [expandedNodes, setExpandedNodes] = reactExports.useState(/* @__PURE__ */ new Set());
   const [loadedDirectories, setLoadedDirectories] = reactExports.useState(/* @__PURE__ */ new Set());
   const [loadingDirectories, setLoadingDirectories] = reactExports.useState(/* @__PURE__ */ new Set());
-  const buildFlattenedTree = (files2, rootPath2) => {
-    console.log("[FileTree.tsx] buildFlattenedTree called with", files2.length, "files");
+  const buildFlattenedTree = (filesToFlatten, _currentRootPathIgnored) => {
+    logDebug("[FileTree.tsx] buildFlattenedTree called with", filesToFlatten.length, "files.");
     const result = [];
-    const idMap = /* @__PURE__ */ new Map();
-    files2.forEach((file) => {
-      const relativePath = file.relativePath;
-      const level = relativePath.split("/").length - 1;
-      const parentPath = level === 0 ? rootPath2 : pathUtils.dirname(file.path);
-      const node = {
-        ...file,
-        id: file.path,
-        level,
-        parentId: parentPath !== file.path ? parentPath : null,
-        children: file.isDirectory ? [] : void 0
-      };
-      idMap.set(node.id, node);
-      result.push(node);
-    });
-    result.forEach((node) => {
-      if (node.parentId) {
-        const parent = idMap.get(node.parentId);
-        if (parent && parent.children) {
-          parent.children.push(node);
-        }
+    const sortedFiles = [...filesToFlatten].sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+    for (const file of sortedFiles) {
+      const pathSegments = file.relativePath.split("/");
+      const level = Math.max(0, pathSegments.length - 1);
+      const name = pathSegments[pathSegments.length - 1] || file.relativePath;
+      let parentId = null;
+      if (pathSegments.length > 1) {
+        parentId = pathSegments.slice(0, -1).join("/");
       }
-    });
+      result.push({
+        id: file.relativePath,
+        // Use relativePath as the unique ID for nodes
+        parentId,
+        path: file.path,
+        // Absolute path
+        relativePath: file.relativePath,
+        name,
+        level,
+        isDirectory: file.isDirectory,
+        isSkipped: file.isSkipped,
+        skipReason: file.skipReason,
+        size: file.size,
+        tokenEstimate: file.tokenEstimate,
+        hasLazyChildren: file.hasLazyChildren
+        // isExpanded and checkState will be managed by component state/reducer elsewhere
+      });
+    }
+    logDebug("[FileTree.tsx] buildFlattenedTree produced", result.length, "nodes.");
     return result;
   };
+  const flattenedNodes = reactExports.useMemo(() => {
+    logDebug("[FileTree.tsx] Memoizing flattenedNodes. Files count:", files.length, "Root path:", rootPath);
+    if (!files || files.length === 0) {
+      logDebug("[FileTree.tsx] No files to process for flattening.");
+      return [];
+    }
+    return buildFlattenedTree(files);
+  }, [files, rootPath]);
   const selectionReducer = (state, action) => {
     logDebug(`selectionReducer ACTION: ${action.type}`, "node" in action ? action.node?.id : "unknown");
     return produce(state, (draft) => {
@@ -9476,10 +9480,6 @@ const FileTree = reactExports.forwardRef((props, ref) => {
   const [selectionState, dispatchSelection] = reactExports.useReducer(selectionReducer, {
     nodeStates: /* @__PURE__ */ new Map()
   });
-  const memoizedAllNodes = reactExports.useMemo(() => {
-    console.log("[FileTree.tsx] Calculating memoizedAllNodes with", files.length, "files");
-    return buildFlattenedTree(files, rootPath);
-  }, [files, rootPath]);
   const flattenedVisibleNodes = reactExports.useMemo(() => {
     console.log("[FileTree.tsx] Calculating flattenedVisibleNodes");
     const visibleNodes = [];
@@ -9488,7 +9488,7 @@ const FileTree = reactExports.forwardRef((props, ref) => {
       let current2 = node;
       let pathToRoot = [current2.id];
       while (current2.parentId) {
-        const parent = memoizedAllNodes.find((n2) => n2.id === current2.parentId);
+        const parent = flattenedNodes.find((n2) => n2.id === current2.parentId);
         if (!parent) return false;
         pathToRoot.push(parent.id);
         current2 = parent;
@@ -9498,27 +9498,27 @@ const FileTree = reactExports.forwardRef((props, ref) => {
       }
       return true;
     };
-    memoizedAllNodes.forEach((node) => {
+    flattenedNodes.forEach((node) => {
       if (isVisible(node)) {
         visibleNodes.push(node);
       }
     });
-    console.log(`[FileTree.tsx] flattenedVisibleNodes calculated: ${visibleNodes.length} visible out of ${memoizedAllNodes.length} total`);
+    console.log(`[FileTree.tsx] flattenedVisibleNodes calculated: ${visibleNodes.length} visible out of ${flattenedNodes.length} total`);
     return visibleNodes;
-  }, [memoizedAllNodes, expandedNodes]);
+  }, [flattenedNodes, expandedNodes]);
   reactExports.useEffect(() => {
-    console.log("[FileTree.tsx] Initializing selection state for", memoizedAllNodes.length, "nodes");
+    console.log("[FileTree.tsx] Initializing selection state for", flattenedNodes.length, "nodes");
     const initialNodeStates = /* @__PURE__ */ new Map();
-    memoizedAllNodes.forEach((node) => {
+    flattenedNodes.forEach((node) => {
       initialNodeStates.set(node.id, "unchecked");
     });
     dispatchSelection({ type: "INITIALIZE_STATES", initialStates: initialNodeStates });
-  }, [memoizedAllNodes]);
+  }, [flattenedNodes]);
   reactExports.useEffect(() => {
     if (onSelectionChange) {
       console.log("[FileTree.tsx] Selection changed, updating App.tsx");
       const selectedFiles = [];
-      memoizedAllNodes.forEach((node) => {
+      flattenedNodes.forEach((node) => {
         const state = selectionState.nodeStates.get(node.id);
         if (state === "checked" && !node.isDirectory && !node.isSkipped) {
           selectedFiles.push({
@@ -9537,12 +9537,12 @@ const FileTree = reactExports.forwardRef((props, ref) => {
       console.log("[FileTree.tsx] First few selections:", selectedFiles.slice(0, 3).map((f2) => ({ path: f2.relativePath, size: f2.size, tokens: f2.tokenEstimate })));
       onSelectionChange(selectedFiles);
     }
-  }, [selectionState.nodeStates, onSelectionChange, memoizedAllNodes]);
+  }, [selectionState.nodeStates, onSelectionChange, flattenedNodes]);
   reactExports.useImperativeHandle(ref, () => ({
     expandAll: () => {
       console.log("[FileTree.tsx] expandAll called");
       const allDirIds = /* @__PURE__ */ new Set();
-      memoizedAllNodes.forEach((node) => {
+      flattenedNodes.forEach((node) => {
         if (node.isDirectory) {
           allDirIds.add(node.id);
         }
@@ -9552,15 +9552,15 @@ const FileTree = reactExports.forwardRef((props, ref) => {
     },
     collapseAll: () => {
       console.log("[FileTree.tsx] collapseAll called");
-      setExpandedNodes(/* @__PURE__ */ new Set([rootPath]));
+      setExpandedNodes(/* @__PURE__ */ new Set());
     },
     selectAll: () => {
       console.log("[FileTree.tsx] selectAll called");
-      dispatchSelection({ type: "SELECT_ALL", nodes: memoizedAllNodes });
+      dispatchSelection({ type: "SELECT_ALL", nodes: flattenedNodes });
     },
     deselectAll: () => {
       console.log("[FileTree.tsx] deselectAll called");
-      dispatchSelection({ type: "DESELECT_ALL", nodes: memoizedAllNodes });
+      dispatchSelection({ type: "DESELECT_ALL", nodes: flattenedNodes });
     }
   }));
   const parentRef = reactExports.useRef(null);
@@ -9596,7 +9596,7 @@ const FileTree = reactExports.forwardRef((props, ref) => {
   const selectedData = reactExports.useMemo(() => {
     let totalSize = 0;
     let count = 0;
-    memoizedAllNodes.forEach((node) => {
+    flattenedNodes.forEach((node) => {
       const state = selectionState.nodeStates.get(node.id);
       if (state === "checked" && !node.isDirectory && !node.isSkipped) {
         totalSize += node.size;
@@ -9605,43 +9605,98 @@ const FileTree = reactExports.forwardRef((props, ref) => {
     });
     console.log(`[FileTree.tsx] Selected data: ${count} files, ${formatFileSize(totalSize)}`);
     return { totalSize, count };
-  }, [selectionState.nodeStates, memoizedAllNodes]);
+  }, [selectionState.nodeStates, flattenedNodes]);
   const renderRow = (index, virtualRow) => {
     const node = flattenedVisibleNodes[index];
-    if (!node) return null;
-    const nodeState = selectionState.nodeStates.get(node.id) || "unchecked";
-    const isExpanded = node.isDirectory && expandedNodes.has(node.id);
+    if (!node) {
+      return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { height: `${virtualRow.size}px` } }, virtualRow.key);
+    }
+    const nodeState = selectionState.nodeStates.get(node.relativePath) || "unchecked";
+    const isExpanded = node.isDirectory && expandedNodes.has(node.relativePath);
+    const handleRowClick = () => {
+      logDebug("[FileTree.tsx] Row clicked:", node.relativePath, "Is directory:", node.isDirectory);
+      if (node.isDirectory) {
+        toggleNodeExpand(node);
+      } else {
+        toggleNodeSelection(node);
+      }
+    };
     return /* @__PURE__ */ jsxRuntimeExports.jsxs(
       "div",
       {
-        className: "flex items-center w-full py-1 px-2 hover:bg-gray-700/50 cursor-pointer",
+        ref: virtualRow.measureElement,
+        "data-index": virtualRow.index,
+        className: clsx(
+          "flex items-center p-1.5 hover:bg-gray-700 cursor-pointer select-none"
+        ),
         style: {
           position: "absolute",
           top: 0,
           left: 0,
           width: "100%",
-          height: virtualRow.size,
-          transform: `translateY(${virtualRow.start}px)`
+          height: `${virtualRow.size}px`,
+          transform: `translateY(${virtualRow.start}px)`,
+          paddingLeft: `${node.level * 20 + 5}px`
         },
-        onClick: () => toggleNodeExpand(node),
+        onClick: handleRowClick,
+        onDoubleClick: () => {
+          if (node.isDirectory) {
+            toggleNodeExpand(node);
+          }
+        },
+        role: "treeitem",
+        "aria-expanded": node.isDirectory ? isExpanded : void 0,
+        "aria-selected": nodeState === "checked" || nodeState === "indeterminate",
+        "aria-level": node.level + 1,
+        "aria-label": `${node.name}${node.isDirectory ? " (directory)" : " (file)"}`,
         children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { paddingLeft: `${node.level * 20}px` }, className: "flex items-center min-w-0 flex-grow", children: [
-            node.isDirectory && /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronIcon, { isOpen: isExpanded }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center flex-grow min-w-0", children: [
+            node.isDirectory && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                onClick: (e) => {
+                  e.stopPropagation();
+                  toggleNodeExpand(node);
+                },
+                className: "mr-1 p-0.5 rounded hover:bg-gray-600",
+                "aria-label": isExpanded ? "Collapse" : "Expand",
+                children: /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronIcon, { isOpen: isExpanded })
+              }
+            ),
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               TriStateCheckbox,
               {
                 state: nodeState,
-                onChange: () => toggleNodeSelection(node)
+                onChange: () => {
+                  logDebug("[FileTree.tsx] Checkbox changed for:", node.relativePath);
+                  toggleNodeSelection(node);
+                }
               }
             ),
             node.isDirectory ? /* @__PURE__ */ jsxRuntimeExports.jsx(FolderIcon, { isOpen: isExpanded }) : /* @__PURE__ */ jsxRuntimeExports.jsx(FileIcon, { file: node }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ml-1.5 truncate", children: pathUtils.basename(node.relativePath) }),
-            node.isSkipped && /* @__PURE__ */ jsxRuntimeExports.jsx(SkipReasonIndicator, { file: node })
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "span",
+              {
+                className: clsx("ml-1 truncate", {
+                  "text-gray-400": node.isSkipped && node.skipReason !== "error" && node.skipReason !== "size",
+                  "text-yellow-500": node.isSkipped && (node.skipReason === "extension" || node.skipReason === "content"),
+                  "text-red-500": node.isSkipped && (node.skipReason === "size" || node.skipReason === "error")
+                }),
+                title: node.relativePath,
+                children: node.name
+              }
+            ),
+            node.tokenEstimate !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ml-2 text-xs text-gray-500", children: [
+              "(",
+              node.tokenEstimate,
+              " tokens)"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(SkipReasonIndicator, { file: node })
           ] }),
-          !node.isDirectory && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ml-auto text-xs text-gray-500 tabular-nums", children: formatFileSize(node.size) })
+          !node.isDirectory && node.size !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ml-auto text-sm text-gray-500 pr-2", children: formatFileSize(node.size) })
         ]
       },
-      node.id
+      node.relativePath
     );
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col h-full", children: [
@@ -9655,9 +9710,9 @@ const FileTree = reactExports.forwardRef((props, ref) => {
             checked: selectedData.count > 0,
             onChange: () => {
               if (selectedData.count > 0) {
-                dispatchSelection({ type: "DESELECT_ALL", nodes: memoizedAllNodes });
+                dispatchSelection({ type: "DESELECT_ALL", nodes: flattenedNodes });
               } else {
-                dispatchSelection({ type: "SELECT_ALL", nodes: memoizedAllNodes });
+                dispatchSelection({ type: "SELECT_ALL", nodes: flattenedNodes });
               }
             }
           }
@@ -10541,109 +10596,6 @@ const DEFAULT_PROMPT_OPTIONS = {
   // No maximum depth
 };
 const MAX_TOKEN_LIMIT = 2e6;
-async function generateFullPrompt(selectedFiles, rootFolderName, allFiles, options = {}, onProgress) {
-  const mergedOptions = { ...DEFAULT_PROMPT_OPTIONS, ...options };
-  const fileMap = generateFileMap(selectedFiles, rootFolderName, allFiles, mergedOptions);
-  let prompt = `<file_map>
-${fileMap}</file_map>
-
-`;
-  let totalTokens = 0;
-  const errors = [];
-  const filesToProcess = selectedFiles.filter((file) => !file.isDirectory && !file.isSkipped);
-  const totalFilesCount = filesToProcess.length;
-  let processedFiles = 0;
-  filesToProcess.reduce((sum, file) => sum + file.tokenEstimate, 0);
-  let tokenCapExceeded = false;
-  for (const file of filesToProcess) {
-    processedFiles++;
-    if (onProgress) {
-      onProgress({
-        current: processedFiles,
-        total: totalFilesCount,
-        fileName: file.relativePath,
-        percentage: Math.round(processedFiles / totalFilesCount * 100)
-      });
-    }
-    try {
-      if (totalTokens + file.tokenEstimate > MAX_TOKEN_LIMIT) {
-        tokenCapExceeded = true;
-        errors.push(`Token limit of ${MAX_TOKEN_LIMIT.toLocaleString()} exceeded. Some files were omitted.`);
-        break;
-      }
-      const result = await window.api.readFileContent(file.path);
-      if (result.isSkipped) {
-        errors.push(`Skipped ${file.relativePath}: ${result.error || "File is binary or too large"}`);
-        continue;
-      }
-      const content = result.content;
-      if (!content) continue;
-      prompt += `<file_contents path="${file.relativePath}">
-${content}
-</file_contents>
-
-`;
-      totalTokens += file.tokenEstimate;
-    } catch (error) {
-      errors.push(`Error reading ${file.relativePath}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  return {
-    prompt,
-    success: errors.length === 0,
-    error: errors.length > 0 ? errors.join("\n") : void 0,
-    tokensApprox: totalTokens,
-    tokenCapExceeded,
-    processedFiles,
-    totalFiles: totalFilesCount
-  };
-}
-async function copyPromptToClipboard(selectedFiles, rootFolderName, allFiles, options = {}, onProgress) {
-  try {
-    const result = await generateFullPrompt(
-      selectedFiles,
-      rootFolderName,
-      allFiles,
-      options,
-      onProgress
-    );
-    if (!result.success && !result.tokenCapExceeded) {
-      return {
-        success: false,
-        error: result.error,
-        tokensApprox: result.tokensApprox,
-        processedFiles: result.processedFiles,
-        totalFiles: result.totalFiles
-      };
-    }
-    const clipboardResult = await window.api.writeToClipboard(result.prompt);
-    if (!clipboardResult.success) {
-      return {
-        success: false,
-        error: clipboardResult.error || "Failed to copy to clipboard",
-        tokensApprox: result.tokensApprox,
-        tokenCapExceeded: result.tokenCapExceeded,
-        processedFiles: result.processedFiles,
-        totalFiles: result.totalFiles
-      };
-    }
-    return {
-      success: true,
-      tokensApprox: result.tokensApprox,
-      tokenCapExceeded: result.tokenCapExceeded,
-      processedFiles: result.processedFiles,
-      totalFiles: result.totalFiles
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      tokensApprox: 0,
-      processedFiles: 0,
-      totalFiles: selectedFiles.filter((f2) => !f2.isDirectory && !f2.isSkipped).length
-    };
-  }
-}
 const TOKEN_LIMIT = MAX_TOKEN_LIMIT;
 const WARNING_THRESHOLD = 90;
 function App() {
@@ -10746,51 +10698,53 @@ function App() {
     return scanResults.rootPath.split("/").pop();
   }, [scanResults?.rootPath]);
   const handleCopyToClipboard = async () => {
-    console.log("[App.tsx] handleCopyToClipboard called. Processed selection count:", processedSelection.count, "Exceeds limit:", processedSelection.exceedsLimit);
-    if (processedSelection.count === 0 || processedSelection.exceedsLimit) {
-      console.log("[App.tsx] CopyToClipboard aborted: no files or exceeds limit.");
+    console.log("[App.tsx] handleCopyToClipboard called. Processed selection count:", processedSelection.count);
+    if (processedSelection.count === 0) {
+      setCopyResult({
+        success: false,
+        message: "No files selected to copy."
+      });
+      console.log("[App.tsx] CopyToClipboard aborted: no files selected.");
       return;
     }
     setIsCopying(true);
     setCopyResult(null);
-    setCopyProgress(null);
     try {
-      const onProgress = (progress) => {
-        setCopyProgress(progress);
-      };
-      const result = await copyPromptToClipboard(
-        processedSelection.files,
-        rootFolderName,
-        scanResults?.files,
-        // Pass all files to show complete repo structure
-        fileMapOptions,
-        // Pass the current file map options
-        onProgress
-        // Pass the progress callback
-      );
+      const filesToCopy = processedSelection.files.map((f2) => ({
+        path: f2.path,
+        // Full path to the file
+        relativePath: f2.relativePath,
+        // Path relative to the project root
+        tokenEstimate: f2.tokenEstimate,
+        isDirectory: f2.isDirectory,
+        isSkipped: f2.isSkipped
+        // Ensure this is accurate
+      }));
+      console.log('[App.tsx] Invoking "generate-payload-and-copy" with an_array_of_files_with_length:', filesToCopy.length);
+      if (filesToCopy.length > 0) {
+        console.log("[App.tsx] Sample file to copy:", filesToCopy[0]);
+      }
+      const result = await window.api.generatePayloadAndCopy(filesToCopy);
+      console.log('[App.tsx] Received response from "generate-payload-and-copy":', result);
       if (result.success) {
-        let message = `Successfully copied ${result.processedFiles} files to clipboard!`;
-        if (result.tokenCapExceeded) {
-          message += ` (${result.processedFiles}/${result.totalFiles} files, token limit reached)`;
-        }
         setCopyResult({
           success: true,
-          message
+          message: result.message
         });
       } else {
         setCopyResult({
           success: false,
-          message: result.error || "Failed to copy to clipboard."
+          message: result.message || "Failed to copy payload to clipboard."
         });
       }
     } catch (error) {
+      console.error("[App.tsx] Error during handleCopyToClipboard:", error);
       setCopyResult({
         success: false,
-        message: error instanceof Error ? error.message : "An unknown error occurred."
+        message: error instanceof Error ? error.message : "An unknown error occurred while communicating with the main process."
       });
     } finally {
       setIsCopying(false);
-      setCopyProgress(null);
     }
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4", children: [

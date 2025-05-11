@@ -37,7 +37,7 @@ alwaysApply: false
   - **Task**: Reducer with `immer`; propagate checked / partial state.  
   - **Dependencies**: 2.1  
   - **Status**: ✅ done  
-  - **Notes**: Enhanced selection reducer with multiple actions using immer; implemented tri-state checkboxes with cascading behavior; added bulk selection features and accessibility improvements including keyboard navigation. _(Bug fix applied for row click interaction for file selection and related refactoring in `FileTree.tsx`)._
+  - **Notes**: Enhanced selection reducer with multiple actions using immer; implemented tri-state checkboxes with cascading behavior; added bulk selection features and accessibility improvements including keyboard navigation. _(Bug fix applied for row click interaction for file selection and related refactoring in `FileTree.tsx`). Further bug fix applied to implement full cascading checkbox logic (upward and downward propagation) in `selectionReducer`._
 
 ## 3 Copy Payload Generation
 - [x] **Step 3.1 – Flatten selection**  
@@ -57,7 +57,10 @@ alwaysApply: false
   - **Notes**: Implemented IPC to read selected files in main process, construct payload with `<file_path>` and `<file_contents>` tags, enforce 2M token cap (warning at 1.8M), and write to clipboard. Renderer calls IPC and displays status.
 
 ## 4 Edge-cases & Performance
-- [ ] **Step 4.1 – Binary / ≥ 1 MB filter** • Dependencies: 3.3  
+- [x] **Step 4.1 – Binary / ≥ 1 MB filter** • Dependencies: 3.3  
+  - **Task**: Ensure files identified as binary or exceeding 1MB are correctly filtered, marked, and handled throughout the application, particularly in the file tree UI and payload generation.
+  - **Status**: ✅ done
+  - **Notes**: Verified binary/size detection in main process (`isFileBinary`). Enhanced `FileTree.tsx` to visually disable checkboxes (`TriStateCheckbox`) for skipped files and prevent interaction. Confirmed skipped files are excluded from payload and token counts.
 - [ ] **Step 4.2 – Lazy child loading** • Dependencies: 4.1  
 - [ ] **Step 4.3 – Live token counter in UI** • Dependencies: 4.2  
 

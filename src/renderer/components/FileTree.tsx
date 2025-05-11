@@ -8,6 +8,107 @@ import { flattenSelection, formatFileSize as formatFileSizeUtil } from '../utils
 // Enable Immer's MapSet plugin to work with Map and Set
 enableMapSet();
 
+// Add this helper near the top of the file
+const DEBUG = true;
+const logDebug = (message: string, ...data: any[]) => {
+  if (DEBUG) {
+    console.log(`[FileTree.tsx] ${message}`, ...data);
+  }
+};
+
+// Helper to get direct children of a node
+const getDirectChildren = (nodeId: string | null, allNodes: FlattenedFile[]): FlattenedFile[] => {
+  if (nodeId === null) { 
+    return allNodes.filter(n => n.parentId === null);
+  }
+  return allNodes.filter(n => n.parentId === nodeId);
+};
+
+// Helper to get all descendants (recursive)
+const getAllDescendants = (nodeId: string, allNodes: FlattenedFile[]): FlattenedFile[] => {
+  const descendants: FlattenedFile[] = [];
+  const directChildren = getDirectChildren(nodeId, allNodes);
+  for (const child of directChildren) {
+    if (!child.isSkipped) { // Only consider non-skipped descendants for state changes
+      descendants.push(child);
+      if (child.isDirectory) {
+        descendants.push(...getAllDescendants(child.id, allNodes));
+      }
+    }
+  }
+  return descendants;
+};
+
+// Helper to update parent states recursively
+const updateParentStatesAfterToggle = (
+  startNodeId: string | null,
+  draftNodeStates: Map<string, CheckState>,
+  allNodes: FlattenedFile[],
+  logPrefix: string = 'updateParentStatesAfterToggle'
+) => {
+  let currentId = startNodeId;
+  logDebug(`[${logPrefix}] Starting update from parent:`, currentId);
+
+  while (currentId) {
+    const currentNode = allNodes.find(n => n.id === currentId);
+    if (!currentNode) {
+      logDebug(`[${logPrefix}] Parent ${currentId} not found in allNodes. Stopping upward propagation.`);
+      break;
+    }
+    if (!currentNode.isDirectory) {
+      logDebug(`[${logPrefix}] Parent ${currentId} is not a directory. Stopping upward propagation.`);
+      break; 
+    }
+
+    const children = getDirectChildren(currentNode.id, allNodes);
+    if (children.length === 0) {
+      logDebug(`[${logPrefix}] Parent ${currentNode.id} has no children. Current state:`, draftNodeStates.get(currentNode.id));
+      currentId = currentNode.parentId;
+      continue;
+    }
+
+    let checkedChildrenCount = 0;
+    let indeterminateChildrenCount = 0;
+    let nonSkippedSelectableChildrenCount = 0;
+
+    for (const child of children) {
+      if (child.isSkipped) continue;
+      nonSkippedSelectableChildrenCount++;
+      const childState = draftNodeStates.get(child.id);
+      if (childState === 'checked') {
+        checkedChildrenCount++;
+      } else if (childState === 'indeterminate') {
+        indeterminateChildrenCount++;
+      }
+    }
+    
+    const oldParentState = draftNodeStates.get(currentNode.id);
+    let newParentState: CheckState = 'unchecked';
+
+    if (nonSkippedSelectableChildrenCount === 0) {
+      newParentState = oldParentState || 'unchecked'; 
+    } else if (indeterminateChildrenCount > 0) {
+      newParentState = 'indeterminate';
+    } else if (checkedChildrenCount === nonSkippedSelectableChildrenCount) {
+      newParentState = 'checked';
+    } else if (checkedChildrenCount > 0 && checkedChildrenCount < nonSkippedSelectableChildrenCount) {
+      newParentState = 'indeterminate';
+    } else { 
+      newParentState = 'unchecked';
+    }
+    
+    if (oldParentState !== newParentState) {
+        draftNodeStates.set(currentNode.id, newParentState);
+        logDebug(`[${logPrefix}] Parent ${currentNode.id} state changed from ${oldParentState} to ${newParentState}`);
+    } else {
+        logDebug(`[${logPrefix}] Parent ${currentNode.id} state remains ${oldParentState}`);
+    }
+    
+    currentId = currentNode.parentId;
+  }
+  logDebug(`[${logPrefix}] Finished update.`);
+};
+
 // Icons for file and folder
 const FolderIcon = ({ isOpen }: { isOpen: boolean }) => (
   <svg 
@@ -153,23 +254,38 @@ const SkipReasonIndicator = ({ file }: { file: FlattenedFile }) => {
 };
 
 // Tri-state checkbox component
-const TriStateCheckbox = ({ state, onChange }: { state: CheckState, onChange: () => void }) => {
-  console.log('[TriStateCheckbox] Rendered with state:', state);
+const TriStateCheckbox = ({ 
+  state, 
+  onChange, 
+  isDisabled // New prop
+}: { 
+  state: CheckState, 
+  onChange: () => void, 
+  isDisabled?: boolean // Optional boolean prop
+}) => {
+  // console.log('[TriStateCheckbox] Rendered with state:', state, 'Disabled:', isDisabled);
   return (
     <button 
       onClick={(e) => {
         e.stopPropagation(); // Prevent row click
-        console.log('[TriStateCheckbox] Clicked with state:', state);
+        if (isDisabled) {
+          logDebug('[TriStateCheckbox] Clicked but disabled for state:', state);
+          return; // Prevent action if disabled
+        }
+        logDebug('[TriStateCheckbox] Clicked with state:', state);
         onChange();
       }}
       className={clsx(
         "w-5 h-5 mr-2 flex items-center justify-center rounded border",
-        state === 'checked' 
+        state === 'checked' && !isDisabled
           ? "bg-blue-600 border-blue-700" 
-          : state === 'indeterminate' 
+          : state === 'indeterminate' && !isDisabled
             ? "bg-blue-600/50 border-blue-700" 
-            : "bg-gray-800 border-gray-600"
+            : "bg-gray-800 border-gray-600", // Default/unchecked or disabled style base
+        isDisabled && "opacity-50 cursor-not-allowed border-gray-700 bg-gray-800" // Specific styling for disabled state
       )}
+      disabled={isDisabled} // HTML disabled attribute
+      aria-disabled={isDisabled} // ARIA attribute for accessibility
     >
       {state === 'checked' && (
         <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -215,14 +331,6 @@ type SelectionAction =
   | { type: 'DESELECT_ALL'; nodes: FlattenedFile[] }
   | { type: 'TOGGLE_VISIBLE_NODES'; nodes: FlattenedFile[] }
   | { type: 'INITIALIZE_STATES'; initialStates: Map<string, CheckState> };
-
-// Add this helper near the top of the file
-const DEBUG = true;
-const logDebug = (message: string, ...data: any[]) => {
-  if (DEBUG) {
-    console.log(`[FileTree.tsx] ${message}`, ...data);
-  }
-};
 
 // Convert to forwardRef to allow parent components to access methods
 const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Element => {
@@ -295,97 +403,170 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
   
   // Selection reducer to handle the tri-state checkboxes
   const selectionReducer = (state: SelectionState, action: SelectionAction): SelectionState => {
-    logDebug(`selectionReducer ACTION: ${action.type}`, 'node' in action ? action.node?.id : 'unknown');
-
     return produce(state, draft => {
+      logDebug(`selectionReducer ACTION: ${action.type}`, 'node' in action && action.node ? action.node.id : ('nodes' in action ? action.nodes.length + ' nodes' : 'initialStates' in action ? action.initialStates.size + ' states' : 'unknown target'));
+      
+      const currentFlattenedNodes = flattenedNodes; 
+
       switch (action.type) {
         case 'TOGGLE_NODE': {
           const { node } = action;
-          try {
-            // Get current state or default to unchecked
-            const currentState = draft.nodeStates.get(node.id) || 'unchecked';
-            // Toggle state: checked → unchecked, unchecked/indeterminate → checked
-            const newState: CheckState = currentState === 'checked' ? 'unchecked' : 'checked';
-            
-            draft.nodeStates.set(node.id, newState);
-            logDebug(`TOGGLE_NODE: Node ${node.id} from ${currentState} to ${newState}`);
-          } catch (error) {
-            console.error('Error in TOGGLE_NODE action:', error);
+          if (!node || node.isSkipped) {
+            logDebug(`TOGGLE_NODE: Node ${node?.id} is skipped or null, no state change.`);
+            break;
           }
-          break;
-        }
-        
-        case 'SET_NODE_STATE': {
-          const { node, state: newState } = action;
-          console.log(`[FileTree.tsx] SET_NODE_STATE: ${node.id} to ${newState}`);
+
+          const currentState = draft.nodeStates.get(node.id) || 'unchecked';
+          const newState: CheckState = currentState === 'checked' ? 'unchecked' : 'checked';
           
+          logDebug(`TOGGLE_NODE: Node ${node.id} (${node.name}) from ${currentState} to ${newState}`);
           draft.nodeStates.set(node.id, newState);
-          break;
-        }
-        
-        case 'SELECT_ALL': {
-          console.log('[FileTree.tsx] SELECT_ALL', action.nodes.length, 'nodes');
-          
-          try {
-            // Set all nodes to checked, except directories which will be determined by children
-            action.nodes.forEach(node => {
-              if (!node.isSkipped) {
-                draft.nodeStates.set(node.id, 'checked');
+
+          if (node.isDirectory) {
+            const descendants = getAllDescendants(node.id, currentFlattenedNodes);
+            logDebug(`TOGGLE_NODE: Propagating to ${descendants.length} descendants of ${node.id}`);
+            descendants.forEach(descendant => {
+              // Do not change state of already skipped descendants during cascade
+              if (!descendant.isSkipped) {
+                 draft.nodeStates.set(descendant.id, newState);
               }
             });
-            
-            console.log(`[FileTree.tsx] SELECT_ALL completed`);
-          } catch (error) {
-            console.error('Error in SELECT_ALL action:', error);
           }
+          updateParentStatesAfterToggle(node.parentId, draft.nodeStates, currentFlattenedNodes, 'TOGGLE_NODE_PARENTS');
+          break;
+        }
+        
+        case 'SET_NODE_STATE': { 
+          const { node, state: newState } = action;
+          if (!node || node.isSkipped) break;
+
+          const oldState = draft.nodeStates.get(node.id);
+          if (oldState !== newState) {
+            draft.nodeStates.set(node.id, newState);
+            logDebug(`SET_NODE_STATE: Node ${node.id} state explicitly set to ${newState}`);
+            if (node.isDirectory) {
+              const descendants = getAllDescendants(node.id, currentFlattenedNodes);
+              descendants.forEach(descendant => {
+                if (!descendant.isSkipped) {
+                  draft.nodeStates.set(descendant.id, newState);
+                }
+              });
+            }
+            updateParentStatesAfterToggle(node.parentId, draft.nodeStates, currentFlattenedNodes, 'SET_NODE_STATE_PARENTS');
+          }
+          break;
+        }
+        
+        case 'SELECT_ALL': {          
+          const parentIdsToUpdate = new Set<string | null>();
+          currentFlattenedNodes.forEach(node => {
+            if (!node.isSkipped) {
+              draft.nodeStates.set(node.id, 'checked');
+              // Collect parent IDs of checked nodes to update them after all nodes are set
+              if (node.parentId) {
+                parentIdsToUpdate.add(node.parentId);
+              }
+            } else {
+              draft.nodeStates.set(node.id, 'unchecked');
+            }
+          });
+          // Update all affected parent directories once. 
+          // Start from the top-level parents or all unique parents found.
+          // A simpler approach for SELECT_ALL is that all non-skipped directories will become 'checked' 
+          // because all their non-skipped children are now checked.
+          // So, direct setting is enough.
+          currentFlattenedNodes.forEach(node => {
+            if (node.isDirectory && !node.isSkipped) {
+                // Check if it has any non-skipped children, if not, it remains as set (checked if it was selectable)
+                const children = getDirectChildren(node.id, currentFlattenedNodes).filter(c => !c.isSkipped);
+                if (children.length > 0) {
+                    draft.nodeStates.set(node.id, 'checked');
+                } else if (draft.nodeStates.get(node.id) !== 'checked') {
+                    // If it has no non-skipped children, and wasn't already checked (e.g. top level selection)
+                    // it should not be forced to checked. Keep it as it is, or uncheck it.
+                    // For SELECT_ALL, if it's selectable (not skipped), it becomes checked.
+                    // The previous loop handles this.
+                }
+            }
+          });
+          logDebug('[FileTree.tsx] SELECT_ALL completed. All selectable nodes set to checked.');
           break;
         }
         
         case 'DESELECT_ALL': {
-          console.log('[FileTree.tsx] DESELECT_ALL', action.nodes.length, 'nodes');
-          
-          // Clear all selection states (set to unchecked)
-          action.nodes.forEach(node => {
+          currentFlattenedNodes.forEach(node => {
             draft.nodeStates.set(node.id, 'unchecked');
           });
-          
-          console.log(`[FileTree.tsx] DESELECT_ALL completed`);
+          logDebug('[FileTree.tsx] DESELECT_ALL completed. All nodes set to unchecked.');
           break;
         }
         
         case 'INITIALIZE_STATES': {
-          console.log('[FileTree.tsx] INITIALIZE_STATES with', action.initialStates.size, 'states');
-          draft.nodeStates = action.initialStates;
-          break;
-        }
-        
-        case 'TOGGLE_VISIBLE_NODES': {
-          console.log('[FileTree.tsx] TOGGLE_VISIBLE_NODES with', action.nodes.length, 'nodes');
-          
-          // Count how many non-directory nodes are already checked
-          let checkedCount = 0;
-          let totalSelectableCount = 0;
-          
-          action.nodes.forEach(node => {
-            if (!node.isDirectory && !node.isSkipped) {
-              totalSelectableCount++;
-              const state = draft.nodeStates.get(node.id);
-              if (state === 'checked') {
-                checkedCount++;
+          draft.nodeStates = new Map(action.initialStates); // Ensure it's a new map for Immer
+          const parentIdsToUpdate = new Set<string | null>();
+          currentFlattenedNodes.forEach(node => { // Iterate all nodes to find parents that might need updates
+            if (action.initialStates.has(node.id) && node.parentId) {
+              parentIdsToUpdate.add(node.parentId);
+            }
+          });
+          // Also add parents of any initially checked/indeterminate directories themselves
+          action.initialStates.forEach((state, nodeId) => {
+            if (state === 'checked' || state === 'indeterminate') {
+              const n = currentFlattenedNodes.find(fn => fn.id === nodeId);
+              if (n && n.isDirectory && n.parentId) {
+                parentIdsToUpdate.add(n.parentId);
               }
             }
           });
-          
-          // If more than half are checked, deselect all. Otherwise, select all.
-          const shouldCheck = checkedCount <= totalSelectableCount / 2;
-          
-          action.nodes.forEach(node => {
-            if (!node.isDirectory && !node.isSkipped) {
-              draft.nodeStates.set(node.id, shouldCheck ? 'checked' : 'unchecked');
+
+          parentIdsToUpdate.forEach(parentId => {
+            if (parentId) { // Ensure parentId is not null
+              updateParentStatesAfterToggle(parentId, draft.nodeStates, currentFlattenedNodes, 'INITIALIZE_PARENTS');
+            }
+          });
+          logDebug('[FileTree.tsx] INITIALIZE_STATES completed and parents updated if necessary');
+          break;
+        }
+        
+        case 'TOGGLE_VISIBLE_NODES': { 
+          let checkedCount = 0;
+          const visibleFileNodes = action.nodes.filter(n => !n.isDirectory && !n.isSkipped);
+          let totalSelectableCount = visibleFileNodes.length;
+
+          visibleFileNodes.forEach(node => {
+            if (draft.nodeStates.get(node.id) === 'checked') {
+              checkedCount++;
             }
           });
           
-          console.log(`[FileTree.tsx] TOGGLE_VISIBLE_NODES completed, set to ${shouldCheck ? 'checked' : 'unchecked'}`);
+          const shouldCheck = totalSelectableCount > 0 && checkedCount <= totalSelectableCount / 2;
+          const parentIdsToUpdate = new Set<string | null>();
+
+          visibleFileNodes.forEach(node => {
+            draft.nodeStates.set(node.id, shouldCheck ? 'checked' : 'unchecked');
+            if (node.parentId) parentIdsToUpdate.add(node.parentId);
+          });
+          
+          // For directories among action.nodes (e.g. the header row if it represents root)
+          // their state should also be toggled, and then their parents updated.
+          action.nodes.forEach(node => {
+            if (node.isDirectory && !node.isSkipped) {
+              draft.nodeStates.set(node.id, shouldCheck ? 'checked' : 'unchecked');
+              // And propagate to its children
+              const descendants = getAllDescendants(node.id, currentFlattenedNodes);
+              descendants.forEach(descendant => {
+                if(!descendant.isSkipped) draft.nodeStates.set(descendant.id, shouldCheck ? 'checked' : 'unchecked');
+              });
+              if (node.parentId) parentIdsToUpdate.add(node.parentId);
+            }
+          });
+
+          parentIdsToUpdate.forEach(parentId => {
+             if (parentId) { // Ensure parentId is not null
+              updateParentStatesAfterToggle(parentId, draft.nodeStates, currentFlattenedNodes, 'TOGGLE_VISIBLE_PARENTS');
+            }
+          });
+          logDebug(`[FileTree.tsx] TOGGLE_VISIBLE_NODES completed, set to ${shouldCheck ? 'checked' : 'unchecked'} and parents updated`);
           break;
         }
       }
@@ -487,27 +668,22 @@ const FileTree = forwardRef<FileTreeHandle, FileTreeProps>((props, ref): JSX.Ele
     expandAll: () => {
       console.log('[FileTree.tsx] expandAll called');
       const allDirIds = new Set<string>();
-      
       flattenedNodes.forEach(node => {
         if (node.isDirectory) {
           allDirIds.add(node.id);
         }
       });
-      
       setExpandedNodes(allDirIds);
       console.log(`[FileTree.tsx] Expanded ${allDirIds.size} directories`);
     },
-    
     collapseAll: () => {
       console.log('[FileTree.tsx] collapseAll called');
       setExpandedNodes(new Set<string>()); // Collapse all by setting to an empty set
     },
-    
     selectAll: () => {
       console.log('[FileTree.tsx] selectAll called');
       dispatchSelection({ type: 'SELECT_ALL', nodes: flattenedNodes });
     },
-    
     deselectAll: () => {
       console.log('[FileTree.tsx] deselectAll called');
       dispatchSelection({ type: 'DESELECT_ALL', nodes: flattenedNodes });
